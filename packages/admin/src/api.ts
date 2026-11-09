@@ -50,7 +50,7 @@ export function upload<T>(path: string, file: File, onProgress: (p: UploadProgre
     xhr.withCredentials = true;
     xhr.upload.onprogress = (e) => onProgress({ loaded: e.loaded, total: e.total });
     xhr.onload = () => {
-      let data: unknown = null;
+      let data: unknown;
       try {
         data = JSON.parse(xhr.responseText);
       } catch {
