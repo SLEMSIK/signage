@@ -64,7 +64,8 @@ export const playlistItems = sqliteTable(
       .references(() => media.id, { onDelete: 'cascade' }),
     position: integer('position').notNull(),
     durationSec: real('duration_sec'),
-    fit: text('fit', { enum: ['contain', 'cover', 'stretch'] }).notNull().default('contain'),
+    /** null — как у экрана по умолчанию (screens.fit_default). */
+    fit: text('fit', { enum: ['contain', 'cover', 'stretch'] }),
     transition: text('transition', { enum: ['none', 'fade'] }).notNull().default('none'),
   },
   (t) => [index('playlist_items_playlist_idx').on(t.playlistId, t.position), index('playlist_items_media_idx').on(t.mediaId)],

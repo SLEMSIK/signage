@@ -76,7 +76,7 @@ export interface PlaylistItemDto {
   mediaId: number;
   position: number;
   durationSec: number | null;
-  fit: z.infer<typeof fitSchema>;
+  fit: z.infer<typeof fitSchema> | null;
   transition: z.infer<typeof transitionSchema>;
   media: MediaDto | null;
 }
@@ -97,7 +97,8 @@ export interface PlaylistDto extends PlaylistSummaryDto {
 export const playlistItemInput = z.object({
   mediaId: z.number().int().positive(),
   durationSec: z.number().positive().max(86400).nullable(),
-  fit: fitSchema,
+  /** null — как у экрана по умолчанию. */
+  fit: fitSchema.nullable(),
   transition: transitionSchema,
 });
 export const playlistInput = z.object({

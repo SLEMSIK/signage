@@ -50,7 +50,7 @@ CREATE TABLE `playlist_items` (
 	`media_id` integer NOT NULL,
 	`position` integer NOT NULL,
 	`duration_sec` real,
-	`fit` text DEFAULT 'contain' NOT NULL,
+	`fit` text,
 	`transition` text DEFAULT 'none' NOT NULL,
 	FOREIGN KEY (`playlist_id`) REFERENCES `playlists`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`media_id`) REFERENCES `media`(`id`) ON UPDATE no action ON DELETE cascade

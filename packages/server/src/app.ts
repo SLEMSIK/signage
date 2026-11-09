@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { sql } from 'drizzle-orm';
 import type { Config } from './config/index.js';
@@ -17,6 +18,12 @@ import { HttpError } from './util/http.js';
 import { authPlugin, requireRole } from './auth/index.js';
 import { systemRoutes } from './system/routes.js';
 import { webPlugin } from './web.js';
+import { PlayerHub } from './realtime/playerHub.js';
+import { AdminHub } from './realtime/adminHub.js';
+import { realtimeRoutes } from './realtime/routes.js';
+import { PlaybackService } from './schedule/playback.js';
+import { ScreensService } from './screens/service.js';
+import { screensAdminRoutes } from './screens/routes.js';
 
 export const VERSION: string = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -30,6 +37,10 @@ export interface AppContext {
   storage: MediaStorage;
   audit: AuditService;
   media: MediaService;
+  screens: ScreensService;
+  hub: PlayerHub;
+  adminHub: AdminHub;
+  playback: PlaybackService;
   version: string;
 }
 
@@ -68,6 +79,12 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     version: VERSION,
   } as AppContext;
   ctx.media = new MediaService(ctx);
+  ctx.screens = new ScreensService(ctx);
+  ctx.hub = new PlayerHub(ctx);
+  ctx.playback = new PlaybackService(ctx);
+  ctx.adminHub = new AdminHub(ctx);
+  ctx.hub.onScreensChanged = () => ctx.adminHub.screensChanged();
+  ctx.hub.onPendingChanged = () => ctx.adminHub.pendingChanged();
   app.decorate('ctx', ctx);
 
   storage.onChange(() => ctx.events.emit('status'));
@@ -82,6 +99,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   });
 
   await app.register(fastifyCookie);
+  await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 } });
   await app.register(fastifyMultipart, {
     limits: { fileSize: config.storage.maxUploadMb * 1024 * 1024, files: 1, fields: 5 },
   });
@@ -99,22 +117,34 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   });
 
   await app.register(mediaServeRoutes);
+  await app.register(realtimeRoutes);
 
   await app.register(
     async (api) => {
       api.addHook('preHandler', requireRole('operator'));
       await api.register(systemRoutes);
       await api.register(mediaAdminRoutes);
+      await api.register(screensAdminRoutes);
     },
     { prefix: '/api/admin' },
   );
 
   await app.register(webPlugin);
 
-  if (background) storage.start();
-  else await storage.check();
+  if (background) {
+    storage.start();
+    ctx.hub.start();
+    ctx.playback.start();
+  } else {
+    await storage.check();
+    ctx.playback.recalculate();
+    ctx.events.on('changed', () => ctx.playback.recalculate());
+  }
 
   app.addHook('onClose', async () => {
+    ctx.playback.stop();
+    ctx.hub.stop();
+    ctx.adminHub.stop();
     storage.stop();
     db.close();
   });
