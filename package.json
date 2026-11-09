@@ -25,7 +25,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "hash-password": "tsx packages/server/src/cli/hash-password.ts",
-    "db:generate": "npm run db:generate -w @signage/server"
+    "db:generate": "npm run db:generate -w @signage/server",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

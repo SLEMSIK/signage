@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Часы, погода и курс ЦБ</title>
+<!--
+  Пример HTML-виджета для Signage.
+  - Только локальные ресурсы: шрифты и скрипты с CDN экранам недоступны.
+  - Внешние данные — через window.signage (сервер добавляет его в каждую HTML-страницу
+    и проксирует запросы к доменам из proxy.allowlist).
+  Загрузите этот файл как есть (одиночный HTML) или упакуйте папку в zip.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: radial-gradient(circle at 20% 20%, #1e3a8a, #0b1220 70%);
+    color: #fff;
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    grid-template-rows: 1fr auto;
+    gap: 48px;
+    padding: 80px 100px;
+  }
+  .clock { align-self: center; }
+  .time { font-size: 300px; font-weight: 300; line-height: 1; letter-spacing: -6px; font-variant-numeric: tabular-nums; }
+  .date { font-size: 64px; color: #cbd5e1; margin-top: 24px; }
+  .date::first-letter { text-transform: uppercase; }
+  .card { background: rgba(255,255,255,0.07); border-radius: 36px; padding: 48px 56px; }
+  .weather { align-self: center; }
+  .label { font-size: 36px; color: #94a3b8; text-transform: uppercase; letter-spacing: 3px; }
+  .temp { font-size: 200px; font-weight: 600; line-height: 1.1; }
+  .cond { font-size: 54px; color: #e2e8f0; }
+  .rates { grid-column: 1 / -1; display: flex; gap: 48px; align-items: center; }
+  .rate { flex: 1; display: flex; align-items: baseline; gap: 24px; font-size: 72px; }
+  .rate .code { color: #94a3b8; font-size: 52px; width: 120px; }
+  .rate .delta { font-size: 40px; }
+  .up { color: #4ade80; } .down { color: #f87171; }
+  .muted { color: #64748b; font-size: 28px; }
+</style>
+</head>
+<body>
+  <section class="clock">
+    <div class="time" id="time">--:--</div>
+    <div class="date" id="date"></div>
+  </section>
+  <section class="card weather">
+    <div class="label">Москва, сейчас</div>
+    <div class="temp" id="temp">—</div>
+    <div class="cond" id="cond">загрузка…</div>
+  </section>
+  <section class="card rates">
+    <div class="label" style="width: 260px">Курс ЦБ</div>
+    <div class="rate"><span class="code">USD</span><span id="usd">—</span><span class="delta" id="usd-d"></span></div>
+    <div class="rate"><span class="code">EUR</span><span id="eur">—</span><span class="delta" id="eur-d"></span></div>
+    <div class="rate"><span class="code">CNY</span><span id="cny">—</span><span class="delta" id="cny-d"></span></div>
+    <div class="muted" id="updated"></div>
+  </section>
+
+<script>
+  var TZ = 'Europe/Moscow';
+  var LAT = 55.7558, LON = 37.6173;
+
+  // Вне Signage (открыли файл в браузере) — ходим напрямую.
+  var api = window.signage || { json: function (u) { return fetch(u).then(function (r) { return r.json(); }); } };
+
+  function tick() {
+    var now = new Date();
+    document.getElementById('time').textContent =
+      now.toLocaleTimeString('ru-RU', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+    document.getElementById('date').textContent =
+      now.toLocaleDateString('ru-RU', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' });
+  }
+
+  var WMO = {
+    0: 'Ясно', 1: 'Преимущественно ясно', 2: 'Переменная облачность', 3: 'Пасмурно',
+    45: 'Туман', 48: 'Изморозь', 51: 'Морось', 53: 'Морось', 55: 'Сильная морось',
+    61: 'Небольшой дождь', 63: 'Дождь', 65: 'Сильный дождь', 66: 'Ледяной дождь', 67: 'Ледяной дождь',
+    71: 'Небольшой снег', 73: 'Снег', 75: 'Сильный снег', 77: 'Снежные зёрна',
+    80: 'Ливень', 81: 'Ливень', 82: 'Сильный ливень', 85: 'Снегопад', 86: 'Сильный снегопад',
+    95: 'Гроза', 96: 'Гроза с градом', 99: 'Гроза с градом'
+  };
+
+  function loadWeather() {
+    var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + LAT + '&longitude=' + LON +
+      '&current=temperature_2m,weather_code&timezone=' + encodeURIComponent(TZ);
+    api.json(url).then(function (d) {
+      var t = Math.round(d.current.temperature_2m);
+      document.getElementById('temp').textContent = (t > 0 ? '+' : '') + t + '°';
+      document.getElementById('cond').textContent = WMO[d.current.weather_code] || '';
+    }).catch(function () { /* оставляем прошлые значения */ });
+  }
+
+  function setRate(id, v) {
+    if (!v) return;
+    var delta = v.Value - v.Previous;
+    document.getElementById(id).textContent = v.Value.toFixed(2).replace('.', ',') + ' ₽';
+    var el = document.getElementById(id + '-d');
+    el.textContent = (delta >= 0 ? '▲ ' : '▼ ') + Math.abs(delta).toFixed(2).replace('.', ',');
+    el.className = 'delta ' + (delta >= 0 ? 'up' : 'down');
+  }
+
+  function loadRates() {
+    api.json('https://www.cbr-xml-daily.ru/daily_json.js').then(function (d) {
+      setRate('usd', d.Valute.USD);
+      setRate('eur', d.Valute.EUR);
+      setRate('cny', d.Valute.CNY);
+      document.getElementById('updated').textContent =
+        'на ' + new Date(d.Date).toLocaleDateString('ru-RU', { timeZone: TZ });
+    }).catch(function () {});
+  }
+
+  tick();
+  setInterval(tick, 1000);
+  loadWeather();
+  setInterval(loadWeather, 10 * 60 * 1000);
+  loadRates();
+  setInterval(loadRates, 60 * 60 * 1000);
+</script>
+</body>
+</html>

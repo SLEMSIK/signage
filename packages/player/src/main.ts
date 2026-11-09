@@ -39,7 +39,20 @@ const engine = new Engine(stage, {
   },
 });
 
+/** Обмен токена на httpOnly cookie для /api/proxy (нужна HTML-контенту в iframe). */
+let proxySessionOk = false;
+function ensureProxySession(): void {
+  const token = store.get(KEYS.token);
+  if (!token || proxySessionOk) return;
+  fetch('/api/player/session', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' })
+    .then((r) => {
+      proxySessionOk = r.ok;
+    })
+    .catch(() => undefined);
+}
+
 function applyState(s: StateMsg): void {
+  ensureProxySession();
   if (state && state.playlist && state.playlist.id !== s.playlist?.id) previousPlaylist = state.playlist;
   state = s;
   store.set(KEYS.lastState, JSON.stringify(s));
@@ -88,7 +101,9 @@ conn.onMessage = (msg) => {
       break;
     case 'paired':
       store.set(KEYS.token, msg.token);
+      proxySessionOk = false;
       overlays.hidePairing();
+      ensureProxySession();
       break;
     case 'state':
       overlays.hidePairing();
