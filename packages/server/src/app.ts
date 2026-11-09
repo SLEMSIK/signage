@@ -27,6 +27,7 @@ import { ScreensService } from './screens/service.js';
 import { screensAdminRoutes } from './screens/routes.js';
 import { PlaylistsService } from './playlists/service.js';
 import { playlistsAdminRoutes } from './playlists/routes.js';
+import { scheduleAdminRoutes } from './schedule/routes.js';
 
 export const VERSION: string = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -156,6 +157,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
       await api.register(mediaAdminRoutes);
       await api.register(screensAdminRoutes);
       await api.register(playlistsAdminRoutes);
+      await api.register(scheduleAdminRoutes);
     },
     { prefix: '/api/admin' },
   );
