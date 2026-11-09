@@ -64,8 +64,23 @@ export class PlayerHub {
     this.timer.unref();
   }
 
+  private stopped = false;
+
+  /** Остановка: фиксируем «офлайн» в БД, пока она открыта, и закрываем соединения. */
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    const ids = [...this.byScreen.keys()];
+    this.byScreen.clear();
+    for (const id of ids) {
+      const rt = this.runtime.get(id);
+      if (rt) rt.online = false;
+      try {
+        this.persist(id, true);
+      } catch {
+        // БД уже закрыта — не страшно, статус восстановится при подключении.
+      }
+    }
+    this.stopped = true;
     for (const c of this.conns) c.socket.close(1001, 'server shutdown');
   }
 
@@ -192,6 +207,7 @@ export class PlayerHub {
 
   private onClose(conn: Conn): void {
     this.conns.delete(conn);
+    if (this.stopped) return;
     if (conn.pairingCode) {
       this.pending.delete(conn.pairingCode);
       this.onPendingChanged();

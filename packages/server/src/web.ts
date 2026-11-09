@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -32,8 +34,17 @@ export async function webPlugin(app: FastifyInstance): Promise<void> {
         for (const [k, v] of Object.entries(extraHeaders?.(filePath) ?? {})) reply.header(k, v);
       },
     });
-    // Всё, что не файл, — index.html (клиентский роутинг).
-    app.get(`${prefix}*`, async (_req, reply) => {
+    // Файлы, появившиеся после старта (пересборка), отдаём как есть; отсутствующие
+    // ассеты — 404; всё остальное — index.html (клиентский роутинг).
+    app.get(`${prefix}*`, async (req, reply) => {
+      const rel = (req.params as { '*': string })['*'] ?? '';
+      const full = path.resolve(root, rel);
+      if (rel && full.startsWith(root + path.sep) && (await stat(full).then((st) => st.isFile(), () => false))) {
+        reply.header('Cache-Control', rel.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+        for (const [k, v] of Object.entries(extraHeaders?.(full) ?? {})) reply.header(k, v);
+        return reply.sendFile(rel, root);
+      }
+      if (rel.startsWith('assets/') || rel.endsWith('.js')) return reply.code(404).send({ error: 'Не найдено' });
       reply.header('Cache-Control', 'no-cache');
       return reply.sendFile('index.html', root);
     });

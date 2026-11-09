@@ -25,6 +25,8 @@ import { realtimeRoutes } from './realtime/routes.js';
 import { PlaybackService } from './schedule/playback.js';
 import { ScreensService } from './screens/service.js';
 import { screensAdminRoutes } from './screens/routes.js';
+import { PlaylistsService } from './playlists/service.js';
+import { playlistsAdminRoutes } from './playlists/routes.js';
 
 export const VERSION: string = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -40,6 +42,7 @@ export interface AppContext {
   media: MediaService;
   mediaSync: MediaSync;
   screens: ScreensService;
+  playlists: PlaylistsService;
   hub: PlayerHub;
   adminHub: AdminHub;
   playback: PlaybackService;
@@ -89,6 +92,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   ctx.media = new MediaService(ctx);
   ctx.mediaSync = new MediaSync(ctx);
   ctx.screens = new ScreensService(ctx);
+  ctx.playlists = new PlaylistsService(ctx);
   ctx.hub = new PlayerHub(ctx);
   ctx.playback = new PlaybackService(ctx);
   ctx.adminHub = new AdminHub(ctx);
@@ -151,6 +155,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
       await api.register(systemRoutes);
       await api.register(mediaAdminRoutes);
       await api.register(screensAdminRoutes);
+      await api.register(playlistsAdminRoutes);
     },
     { prefix: '/api/admin' },
   );

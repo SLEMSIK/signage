@@ -178,6 +178,8 @@ export interface SystemStatus {
   timezone: string;
   ffmpeg: boolean;
   maxUploadMb: number;
+  defaultImageDurationSec: number;
+  defaultHtmlDurationSec: number;
 }
 
 export interface BackupDto {

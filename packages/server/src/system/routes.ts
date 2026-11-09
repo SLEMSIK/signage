@@ -26,6 +26,8 @@ export async function systemStatus(ctx: AppContext): Promise<SystemStatus> {
     timezone: config.server.timezone,
     ffmpeg: await ffmpegAvailable(),
     maxUploadMb: config.storage.maxUploadMb,
+    defaultImageDurationSec: config.player.defaultImageDurationSec,
+    defaultHtmlDurationSec: config.player.defaultHtmlDurationSec,
   };
 }
 

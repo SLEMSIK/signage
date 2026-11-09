@@ -1,55 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import type { ScreenDto, ServerToPlayer } from '@signage/shared';
+import type { ScreenDto } from '@signage/shared';
 import { createTestApp, type TestApp } from '../test-utils/app.js';
-
-/** Тестовый плеер: копит входящие сообщения и умеет ждать нужное. */
-class FakePlayer {
-  ws: WebSocket;
-  messages: ServerToPlayer[] = [];
-  private waiters: { type: string; resolve: (m: ServerToPlayer) => void }[] = [];
-
-  constructor(url: string) {
-    this.ws = new WebSocket(url);
-    this.ws.on('message', (raw) => {
-      const msg = JSON.parse(String(raw)) as ServerToPlayer;
-      const idx = this.waiters.findIndex((w) => w.type === msg.type);
-      if (idx >= 0) this.waiters.splice(idx, 1)[0]!.resolve(msg);
-      else this.messages.push(msg);
-    });
-  }
-
-  opened(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws.readyState === WebSocket.OPEN) resolve();
-      this.ws.once('open', () => resolve());
-      this.ws.once('error', reject);
-    });
-  }
-
-  next<T extends ServerToPlayer['type']>(type: T, timeoutMs = 3000): Promise<Extract<ServerToPlayer, { type: T }>> {
-    const idx = this.messages.findIndex((m) => m.type === type);
-    if (idx >= 0) return Promise.resolve(this.messages.splice(idx, 1)[0] as Extract<ServerToPlayer, { type: T }>);
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(`timeout waiting for ${type}`)), timeoutMs);
-      this.waiters.push({
-        type,
-        resolve: (m) => {
-          clearTimeout(t);
-          resolve(m as Extract<ServerToPlayer, { type: T }>);
-        },
-      });
-    });
-  }
-
-  send(msg: unknown): void {
-    this.ws.send(JSON.stringify(msg));
-  }
-
-  close(): void {
-    this.ws.close();
-  }
-}
+import { FakePlayer } from '../test-utils/fakePlayer.js';
 
 describe('screens & pairing', () => {
   let t: TestApp;
