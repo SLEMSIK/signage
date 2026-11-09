@@ -16,7 +16,8 @@
 
 ## Документация
 
-- [docs/deploy.md](docs/deploy.md) — установка сервера: Proxmox, Docker, SMB, бэкапы, отказоустойчивость.
+- [docs/install-ubuntu.md](docs/install-ubuntu.md) — **установка на чистую Ubuntu** шаг за шагом: VM в Proxmox, Docker, SMB, пользователи, первый запуск, проверка.
+- [docs/deploy.md](docs/deploy.md) — эксплуатация: работа без SMB, обновление, бэкапы и восстановление, отказ узла Proxmox, безопасность.
 - [kiosk/README.md](kiosk/README.md) — установка плеера на Windows.
 - [docs/widget-example/index.html](docs/widget-example/index.html) — пример HTML-виджета: часы, погода, курс ЦБ.
 
@@ -26,7 +27,7 @@
 
 ```bash
 # на сервере (Docker)
-docker compose run --rm -it signage node packages/server/dist/cli/hash-password.js
+docker compose run --rm signage node packages/server/dist/cli/hash-password.js
 # при разработке
 npm run hash-password
 ```

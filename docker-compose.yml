@@ -2,7 +2,6 @@ services:
   signage:
     build: .
     image: signage:latest
-    container_name: signage
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:8080"
