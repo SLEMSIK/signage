@@ -20,13 +20,16 @@ users:
     passwordHash: "$2b$10$REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_M"
 
 storage:
-  mediaPath: /data/media          # точка монтирования SMB внутри контейнера
+  mediaPath: /data/smb/share      # SMB внутри контейнера (на хосте — $SMB_ROOT/share, см. deploy/setup-smb.sh)
   dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
-  backupPath: /data/media/_backup # куда класть ежедневный бэкап БД
-  # Резерв на диске VM: если SMB недоступен, загрузки сохраняются сюда и
-  # автоматически переносятся на SMB, когда он вернётся. null — отключить резерв
-  # (тогда при недоступном SMB загрузка блокируется).
+  backupPath: /data/smb/share/_backup # куда класть ежедневный бэкап БД
+  # Диск VM. Приоритет у SMB; если он недоступен, сервер работает отсюда:
+  #  - новые загрузки сохраняются сюда и потом сами переносятся на SMB;
+  #  - при localMirror: true здесь же лежит копия всей медиатеки, и плееры
+  #    получают файлы, даже если SMB недоступен (в т.ч. при загрузке VM).
+  # null — отключить (тогда без SMB загрузка блокируется, файлы не отдаются).
   localFallbackPath: /data/local-media
+  localMirror: true
   localMinFreeMb: 2048            # не писать на диск VM, если свободно меньше
   backupTime: "03:30"             # время ежедневного бэкапа (server.timezone)
   backupKeep: 14                  # сколько копий хранить

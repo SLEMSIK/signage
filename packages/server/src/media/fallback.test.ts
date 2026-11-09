@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
@@ -76,7 +76,9 @@ describe('local fallback storage', () => {
     expect(list.every((m) => m.location === 'primary')).toBe(true);
     const row = t.app.ctx.media.get(img.id);
     expect(existsSync(t.app.ctx.storage.absIn('primary', row.relPath))).toBe(true);
-    expect(existsSync(t.app.ctx.storage.absIn('local', row.relPath))).toBe(false);
+    // Локальная копия остаётся зеркалом (localMirror включён по умолчанию).
+    expect(existsSync(t.app.ctx.storage.absIn('local', row.relPath))).toBe(true);
+    expect(row.mirrored).toBe(true);
     expect(existsSync(t.app.ctx.storage.absIn('primary', row.thumbPath!))).toBe(true);
     const pkgRow = t.app.ctx.media.get(pkg.id);
     expect(existsSync(t.app.ctx.storage.absIn('primary', `${pkgRow.relPath}/index.html`))).toBe(true);
@@ -96,6 +98,33 @@ describe('local fallback storage', () => {
     expect(health.statusCode).toBe(200);
     await new Promise((r) => setTimeout(r, 200));
     expect(t.app.ctx.mediaSync.pendingCount()).toBe(0);
+  });
+
+  it('mirrors files uploaded to SMB and serves them from the VM disk while SMB is down', async () => {
+    const png = await sharp({ create: { width: 10, height: 10, channels: 3, background: '#abc' } }).png().toBuffer();
+    const dto = (await upload('smb.png', png)).json<MediaDto>();
+    expect(dto.location).toBe('primary');
+    await t.app.ctx.mediaSync.run();
+    const row = t.app.ctx.media.get(dto.id);
+    expect(row.mirrored).toBe(true);
+    expect(existsSync(t.app.ctx.storage.absIn('local', row.relPath))).toBe(true);
+    expect(t.app.ctx.mediaSync.mirrorStatus()).toMatchObject({ enabled: true, problem: null });
+
+    setPrimaryDown(t, true);
+    const file = await t.app.inject({ url: dto.url });
+    expect(file.statusCode).toBe(200);
+    expect(file.rawPayload.equals(png)).toBe(true);
+    expect((await t.app.inject({ url: dto.thumbUrl! })).statusCode).toBe(200);
+    setPrimaryDown(t, false);
+  });
+
+  it('treats a visible .NOT-MOUNTED marker as an unmounted share', async () => {
+    const marker = path.join(t.config.storage.mediaPath, '.NOT-MOUNTED');
+    writeFileSync(marker, '');
+    expect(await t.app.ctx.storage.check()).toBe(false);
+    expect(t.app.ctx.storage.error).toContain('не смонтирован');
+    rmSync(marker);
+    expect(await t.app.ctx.storage.check()).toBe(true);
   });
 
   it('deletes a locally stored file from the VM disk', async () => {
@@ -130,5 +159,29 @@ describe('without local fallback', () => {
     const status = (await t.app.inject({ url: '/api/admin/status', headers: { cookie } })).json<SystemStatus>();
     expect(status.uploadTarget).toBeNull();
     expect(status.uploadBlockedReason).toContain('недоступно');
+  });
+});
+
+describe('without local mirror', () => {
+  let t: TestApp;
+  beforeAll(async () => {
+    t = await createTestApp((c) => {
+      c.storage.localMirror = false;
+    });
+  });
+  afterAll(async () => t.close());
+
+  it('does not keep copies and returns 503 for SMB files while SMB is down', async () => {
+    const cookie = await t.login('admin');
+    const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#0ff' } }).png().toBuffer();
+    const mp = multipart('x.png', png);
+    const dto = (
+      await t.app.inject({ method: 'POST', url: '/api/admin/media', payload: mp.payload, headers: { 'content-type': mp.ct, cookie } })
+    ).json<MediaDto>();
+    await t.app.ctx.mediaSync.run();
+    expect(t.app.ctx.media.get(dto.id).mirrored).toBe(false);
+    setPrimaryDown(t, true);
+    expect((await t.app.inject({ url: dto.url })).statusCode).toBe(503);
+    setPrimaryDown(t, false);
   });
 });

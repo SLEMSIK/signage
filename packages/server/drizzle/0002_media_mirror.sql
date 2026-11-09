@@ -1,0 +1,1 @@
+ALTER TABLE `media` ADD `mirrored` integer DEFAULT false NOT NULL;

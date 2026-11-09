@@ -8,7 +8,15 @@ services:
       - "${PORT:-8080}:8080"
     volumes:
       - ./config/config.yaml:/config/config.yaml:ro
-      - media:/data/media
+      # Сетевой диск монтируется на хосте (deploy/setup-smb.sh), а сюда пробрасывается
+      # родительский каталог. rslave: если SMB подмонтируется позже (был недоступен при
+      # загрузке VM), контейнер увидит его без перезапуска. Контейнер стартует и без SMB.
+      - type: bind
+        source: ${SMB_ROOT:-/srv/signage-smb}
+        target: /data/smb
+        bind:
+          propagation: rslave
+          create_host_path: true
       - local_media:/data/local-media
       - db:/data/db
     environment:
@@ -20,15 +28,8 @@ services:
         max-file: "5"
 
 volumes:
-  # Медиатека на сетевом диске. Смена адреса SMB — правка .env.
-  media:
-    driver: local
-    driver_opts:
-      type: cifs
-      device: "//${SMB_HOST}/${SMB_SHARE}"
-      o: "username=${SMB_USER},password=${SMB_PASSWORD},vers=${SMB_VERS:-3.0},uid=1000,gid=1000,file_mode=0664,dir_mode=0775,soft,nobrl"
-  # Резерв на диске VM: сюда пишутся загрузки, пока SMB недоступен,
-  # потом сервер сам переносит их на SMB.
+  # Диск VM: файлы, загруженные при недоступном SMB, и копия (зеркало) медиатеки
+  # для работы без SMB.
   local_media: {}
   # База SQLite — только локально: на SMB ломаются блокировки.
   db: {}

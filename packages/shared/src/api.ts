@@ -27,6 +27,8 @@ export interface MediaDto {
   url: string;
   /** primary — на сетевом диске, local — временно на диске сервера (ждёт переноса). */
   location: 'primary' | 'local';
+  /** Есть ли копия на диске сервера (работает без SMB). */
+  mirrored: boolean;
   thumbUrl: string | null;
   warnings: string[];
   createdAt: number;
@@ -174,6 +176,8 @@ export interface SystemStatus {
   localPending: number;
   /** Свободно на диске сервера, МБ (для резерва). */
   localFreeMb: number | null;
+  /** Копия медиатеки на диске сервера для работы без SMB. */
+  mirror: { enabled: boolean; mirrored: number; total: number; problem: string | null };
   serverTime: number;
   timezone: string;
   ffmpeg: boolean;

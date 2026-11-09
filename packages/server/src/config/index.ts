@@ -40,9 +40,9 @@ export const configSchema = z.object({
     .min(1)
     .refine((u) => new Set(u.map((x) => x.login)).size === u.length, 'Логины пользователей должны быть уникальны'),
   storage: z.object({
-    mediaPath: z.string().default('/data/media'),
+    mediaPath: z.string().default('/data/smb/share'),
     dbPath: z.string().default('/data/db/signage.sqlite'),
-    backupPath: z.string().default('/data/media/_backup'),
+    backupPath: z.string().default('/data/smb/share/_backup'),
     /**
      * Резервный каталог на диске VM: сюда сохраняются загрузки, пока SMB недоступен,
      * потом файлы автоматически переносятся на SMB. null — резерв выключен.
@@ -50,6 +50,12 @@ export const configSchema = z.object({
     localFallbackPath: z.string().nullable().default('/data/local-media'),
     /** Не принимать загрузки на диск VM, если свободного места меньше. */
     localMinFreeMb: z.number().nonnegative().default(2048),
+    /**
+     * Держать на диске VM копию всей медиатеки (в localFallbackPath) и отдавать её,
+     * пока SMB недоступен. Без зеркала при недоступном SMB отдаются только файлы,
+     * загруженные в это время.
+     */
+    localMirror: z.boolean().default(true),
     maxUploadMb: z.number().positive().default(500),
     /** Лимит размера zip после распаковки. */
     maxUnzippedMb: z.number().positive().default(1000),

@@ -54,9 +54,13 @@ function Shell() {
       <main className="main">
         {status && !status.storageAvailable && status.uploadTarget === 'local' && (
           <div className="banner banner-warn">
-            <strong>Сетевое хранилище недоступно.</strong> Новые файлы сохраняются на диск сервера и будут перенесены на сетевой диск
-            автоматически, когда он появится{status.localPending > 0 ? ` (ждут переноса: ${status.localPending})` : ''}. Экраны продолжают играть
-            из своего кэша.
+            <strong>Сетевое хранилище недоступно — сервер работает с диска сервера.</strong> Новые файлы сохраняются локально и будут
+            перенесены на сетевой диск автоматически{status.localPending > 0 ? ` (ждут переноса: ${status.localPending})` : ''}.
+            {status.mirror.enabled
+              ? status.mirror.mirrored < status.mirror.total
+                ? ` Копия медиатеки на диске сервера неполная: доступно ${status.mirror.mirrored} из ${status.mirror.total} файлов, остальные экраны покажут из своего кэша.`
+                : ' Вся медиатека доступна из копии на диске сервера.'
+              : ' Файлы с сетевого диска сейчас недоступны — экраны играют из своего кэша.'}
             {status.storageError && <div className="small">{status.storageError}</div>}
           </div>
         )}

@@ -32,6 +32,8 @@ export const media = sqliteTable('media', {
   title: text('title').notNull(),
   /** primary — сетевой диск (storage.mediaPath), local — резервный каталог на диске VM. */
   location: text('location', { enum: ['primary', 'local'] }).notNull().default('primary'),
+  /** Есть ли полная копия файла в зеркале на диске VM (для работы без SMB). */
+  mirrored: integer('mirrored', { mode: 'boolean' }).notNull().default(false),
   /** Путь относительно корня хранилища (location). Для html_zip — каталог пакета. */
   relPath: text('rel_path').notNull(),
   /** Для html_zip — путь к index.html внутри каталога пакета. */

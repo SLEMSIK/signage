@@ -1,14 +1,15 @@
 # Развёртывание сервера Signage
 
-Сервер — один Docker-контейнер (Node.js) в виртуальной машине Ubuntu на Proxmox. Медиатека лежит на сетевом диске SMB, база SQLite — на локальном диске VM.
+Сервер — один Docker-контейнер (Node.js) в виртуальной машине Ubuntu на Proxmox. Медиатека лежит на сетевом диске SMB (приоритет), её копия и база SQLite — на локальном диске VM. Если SMB недоступен, сервер полностью работает с диска VM.
 
 ```
  Proxmox
  └── VM Ubuntu 24.04 (10.33.44.20)
+     ├── /srv/signage-smb/share  ← SMB //10.33.44.5/signage, монтирует хост (deploy/setup-smb.sh)
      └── Docker: signage
-         ├── /data/media        ← SMB //10.33.44.5/signage  (volume media, cifs)
-         ├── /data/local-media  ← диск VM, резерв на время недоступности SMB  (volume local_media)
-         └── /data/db           ← диск VM, SQLite  (volume db)
+         ├── /data/smb/share     ← тот же SMB (bind, propagation rslave)
+         ├── /data/local-media   ← диск VM: загрузки без SMB и копия медиатеки (volume local_media)
+         └── /data/db            ← диск VM, SQLite (volume db)
 ```
 
 ## 1. Виртуальная машина
@@ -16,7 +17,7 @@
 В Proxmox создайте VM:
 
 - ОС: Ubuntu Server 24.04 LTS;
-- 2 vCPU, 2–4 ГБ RAM, диск 20 ГБ. Если SMB может долго не работать, добавьте место под резерв медиа;
+- 2 vCPU, 2–4 ГБ RAM; диск — 20 ГБ **плюс объём медиатеки**: на диске VM хранится её полная копия для работы без SMB (если места мало, отключите `storage.localMirror`);
 - сеть: мост в локальную сеть учреждения, статический IP (например `10.33.44.20`);
 - включите **QEMU Guest Agent** (Options → QEMU Guest Agent) и установите его в VM: `sudo apt install qemu-guest-agent`.
 
@@ -58,7 +59,7 @@ cp config/config.example.yaml config/config.yaml
 chmod 600 .env config/config.yaml
 ```
 
-**`.env`**: адрес SMB и учётные данные. Смена адреса SMB — правка одной строки `SMB_HOST`:
+**`.env`**: адрес SMB и учётные данные:
 
 ```ini
 PORT=8080
@@ -66,8 +67,18 @@ SMB_HOST=10.33.44.5
 SMB_SHARE=signage
 SMB_USER=signage
 SMB_PASSWORD=...
+SMB_DOMAIN=
 SMB_VERS=3.0
+SMB_ROOT=/srv/signage-smb
 ```
+
+Смонтируйте SMB на хосте:
+
+```bash
+sudo ./deploy/setup-smb.sh
+```
+
+Скрипт сохраняет пароль в `/etc/signage-smb.cred` (права 600) и добавляет шару в `/etc/fstab` с `nofail`, поэтому VM загружается и без SMB. Он также ставит таймер `signage-smb-remount`, который раз в минуту монтирует шару заново, если она отвалилась. В пустом каталоге точки монтирования лежит метка `.NOT-MOUNTED`: так сервер отличает несмонтированную шару от пустой. Смена адреса SMB — правка `.env` и повторный запуск `setup-smb.sh`.
 
 **`config/config.yaml`**:
 
@@ -112,47 +123,25 @@ sudo ufw allow from 10.0.0.0/8 to any port 8080 proto tcp
 
 ## 6. Когда SMB недоступен
 
-**Во время работы** (сеть пропала, файловый сервер перезагружается):
+Приоритет у SMB; если он недоступен, сервер работает с диска VM:
 
-- сервер продолжает работать; плееры играют из своего кэша (Service Worker);
-- новые загрузки сохраняются на диск VM (`/data/local-media`), в админке жёлтый баннер;
-- если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка блокируется;
-- когда SMB возвращается (проверка раз в 30 с), сервер сам переносит файлы на SMB со сверкой контрольных сумм. URL не меняются, кэш плееров не сбрасывается;
-- бэкапы БД в это время тоже пишутся на диск VM и переносятся позже.
+- **чтение:** файлы отдаются из копии медиатеки на диске VM (`storage.localMirror: true`). Сервер держит копию сам: каждый новый файл на SMB копируется на диск VM, старые докопируются при старте. Состояние копии видно в «Настройках»;
+- **загрузка:** новые файлы сохраняются на диск VM; когда SMB вернётся, сервер сам перенесёт их со сверкой контрольных сумм. URL не меняются, кэш плееров не сбрасывается;
+- **бэкапы БД** пишутся на диск VM и переносятся позже;
+- в админке жёлтый баннер «Сетевое хранилище недоступно — сервер работает с диска сервера»;
+- если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка блокируется, а копия медиатеки перестаёт пополняться: часть файлов без SMB будет недоступна, об этом предупредят «Настройки».
 
-Монтирование с опцией `soft` даёт ошибку вместо бесконечного зависания, cifs сам переподключается к шаре.
+Это работает и **при загрузке VM**: SMB монтирует хост с `nofail`, контейнер стартует всегда. Когда шара появится, таймер `signage-smb-remount` смонтирует её (до минуты), контейнер увидит её без перезапуска (`propagation: rslave`), и сервер вернётся на SMB.
 
-**При запуске VM.** Docker монтирует cifs-volume при старте контейнера. Если SMB в этот момент недоступен, контейнер **не запустится** («error while mounting volume»), и резерв на диске VM не включится. Плееры при этом продолжают играть из кэша. Чтобы контейнер поднялся сам, как только SMB появится, добавьте таймер, который периодически выполняет `docker compose up -d` (команда идемпотентна):
-
-```ini
-# /etc/systemd/system/signage-ensure.service
-[Unit]
-Description=Signage: ensure container is running
-After=docker.service network-online.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/signage
-ExecStart=/usr/bin/docker compose up -d
-```
-
-```ini
-# /etc/systemd/system/signage-ensure.timer
-[Unit]
-Description=Signage: retry start every 2 minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=2min
-
-[Install]
-WantedBy=timers.target
-```
+Проверить состояние на VM:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now signage-ensure.timer
+mountpoint /srv/signage-smb/share
+systemctl list-timers signage-smb-remount.timer
+curl -s http://localhost:8080/health    # status: ok | degraded
 ```
+
+Если вы раньше ставили таймер `signage-ensure.timer` из прежней версии этой инструкции, `setup-smb.sh` отключит его: он больше не нужен.
 
 ## 7. Обновление
 
@@ -168,7 +157,7 @@ docker compose up -d --build
 
 - Бэкап создаётся при каждом старте и ежедневно в `storage.backupTime` (по умолчанию 03:30), хранятся последние `storage.backupKeep` (14) копий в `storage.backupPath` на SMB (`_backup` в шаре).
 - Делать, скачивать и восстанавливать бэкапы — в админке, раздел «Настройки» (только `admin`). Перед восстановлением автоматически сохраняется страховочная копия.
-- Медиафайлы в бэкап не входят: они на SMB и резервируются средствами файлового сервера.
+- Медиафайлы в бэкап не входят: они на SMB (и в копии на диске VM) и резервируются средствами файлового сервера.
 
 **Восстановление вручную** (например, на новой VM, когда админка ещё пуста или не запускается):
 

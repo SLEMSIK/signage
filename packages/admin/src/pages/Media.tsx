@@ -235,6 +235,11 @@ export function MediaPage() {
                   {formatBytes(m.size)}
                   {m.durationSec ? ` · ${formatDuration(m.durationSec)}` : ''}
                 </div>
+                {status && !status.storageAvailable && m.location === 'primary' && !m.mirrored && (
+                  <div className="small" style={{ color: 'var(--danger)' }} title="Файл есть только на сетевом диске, копии на диске сервера нет">
+                    недоступен без SMB
+                  </div>
+                )}
                 {m.location === 'local' && (
                   <div className="small" style={{ color: 'var(--warning)' }} title="Сетевой диск был недоступен. Файл будет перенесён автоматически.">
                     ⏳ на диске сервера, ждёт переноса

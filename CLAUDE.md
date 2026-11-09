@@ -89,9 +89,9 @@ users:
     passwordHash: "$2b$10$..."
 
 storage:
-  mediaPath: /data/media          # точка монтирования SMB внутри контейнера
+  mediaPath: /data/smb/share      # SMB внутри контейнера (монтирует хост)
   dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
-  backupPath: /data/media/_backup # куда класть ежедневный бэкап БД
+  backupPath: /data/smb/share/_backup # куда класть ежедневный бэкап БД
   maxUploadMb: 500
 
 proxy:
@@ -107,25 +107,26 @@ player:
   defaultHtmlDurationSec: 30
 ```
 
-SMB подключается через Docker-volume с драйвером cifs. Параметры лежат в `.env`, поэтому смена адреса — это правка одной строки:
+SMB монтируется **на хосте** скриптом `deploy/setup-smb.sh` (fstab с `nofail` + таймер `signage-smb-remount` раз в минуту), а в контейнер пробрасывается родительский каталог с `propagation: rslave`. Так контейнер стартует и без SMB, а шара, смонтированная позже, появляется в нём без перезапуска. Параметры SMB лежат в `.env`; смена адреса — правка `.env` и повторный запуск скрипта:
 
 ```yaml
 # docker-compose.yml (фрагмент)
 volumes:
-  media:
-    driver: local
-    driver_opts:
-      type: cifs
-      device: "//${SMB_HOST}/${SMB_SHARE}"
-      o: "username=${SMB_USER},password=${SMB_PASSWORD},vers=3.0,uid=1000,gid=1000,file_mode=0664,dir_mode=0775"
-  db: {}
+  - type: bind
+    source: ${SMB_ROOT:-/srv/signage-smb}   # шара смонтирована в $SMB_ROOT/share
+    target: /data/smb                       # storage.mediaPath: /data/smb/share
+    bind: { propagation: rslave }
+  - local_media:/data/local-media           # диск VM: резерв и копия медиатеки
+  - db:/data/db
 ```
+
+В пустом каталоге точки монтирования лежит метка `.NOT-MOUNTED`. Если сервер её видит, значит SMB не смонтирован.
 
 **Важно:** SQLite нельзя держать на SMB, там ломаются блокировки. БД хранится на локальном volume `db`. Раз в сутки и при старте делается бэкап (`VACUUM INTO`) в `storage.backupPath` на SMB. Ротация — 14 копий.
 
 Если SMB недоступен, сервер не падает, плееры продолжают играть из своего кэша.
 
-**Резерв на диске VM.** Пока SMB недоступен, новые загрузки сохраняются в `storage.localFallbackPath` (Docker-volume `local_media` на диске VM). У медиафайла в БД есть поле `location` (`primary` — SMB, `local` — диск VM); относительный путь одинаков в обоих местах, поэтому URL не меняются. После каждой успешной проверки SMB (раз в 30 с и в `/health`) сервер переносит локальные файлы на SMB: копия во временный путь → проверка (sha256 для файла, состав и размеры для zip-пакета) → rename → `location = primary` → удаление локальной копии. Если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка отклоняется. В админке при этом жёлтый баннер «Сетевое хранилище недоступно — файлы сохраняются на диск сервера (ждут переноса: N)». Если `localFallbackPath: null`, резерв выключен и загрузка при недоступном SMB блокируется (красный баннер).
+**Работа с диска VM (приоритет — SMB).** При `storage.localMirror: true` сервер держит на диске VM копию всей медиатеки (`media.mirrored`) и, пока SMB недоступен, отдаёт файлы из неё. Пока SMB недоступен, новые загрузки сохраняются в `storage.localFallbackPath` (Docker-volume `local_media` на диске VM). У медиафайла в БД есть поле `location` (`primary` — SMB, `local` — диск VM); относительный путь одинаков в обоих местах, поэтому URL не меняются. После каждой успешной проверки SMB (раз в 30 с и в `/health`) сервер переносит локальные файлы на SMB: копия во временный путь → проверка (sha256 для файла, состав и размеры для zip-пакета) → rename → `location = primary` → удаление локальной копии. Если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка отклоняется. В админке при этом жёлтый баннер «Сетевое хранилище недоступно — файлы сохраняются на диск сервера (ждут переноса: N)». Если `localFallbackPath: null`, резерв выключен и загрузка при недоступном SMB блокируется (красный баннер).
 
 ## Роли
 

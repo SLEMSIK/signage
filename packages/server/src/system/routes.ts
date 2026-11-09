@@ -22,6 +22,7 @@ export async function systemStatus(ctx: AppContext): Promise<SystemStatus> {
     uploadBlockedReason,
     localPending: ctx.mediaSync.pendingCount(),
     localFreeMb: free === null ? null : Math.floor(free / 1024 / 1024),
+    mirror: ctx.mediaSync.mirrorStatus(),
     serverTime: Date.now(),
     timezone: config.server.timezone,
     ffmpeg: await ffmpegAvailable(),

@@ -4,6 +4,11 @@ import path from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 
 const MARKER = '.signage-storage';
+/**
+ * Метка «шара не смонтирована»: лежит в пустом каталоге точки монтирования на хосте.
+ * Когда SMB смонтирован, она скрыта под ним; если видна — мы смотрим на диск VM.
+ */
+export const NOT_MOUNTED = '.NOT-MOUNTED';
 const CHECK_TIMEOUT_MS = 5000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
@@ -77,6 +82,17 @@ export class MediaStorage {
     return location === 'primary' ? this.available : this.localRoot !== null;
   }
 
+  /**
+   * Откуда отдавать файл: SMB в приоритете; если он недоступен — копия на диске VM
+   * (файл загружен туда или есть в зеркале). null — сейчас файл недоступен.
+   */
+  readLocation(row: { location: MediaLocation; mirrored: boolean }): MediaLocation | null {
+    if (row.location === 'local') return this.localRoot ? 'local' : null;
+    if (this.available) return 'primary';
+    if (row.mirrored && this.localRoot) return 'local';
+    return null;
+  }
+
   /** Свободное место на диске VM (байт) или null, если резерв выключен/недоступен. */
   async localFreeBytes(): Promise<number | null> {
     if (!this.localRoot) return null;
@@ -137,6 +153,13 @@ export class MediaStorage {
   }
 
   private async probe(): Promise<void> {
+    // Сначала метка: пустой каталог точки монтирования принадлежит root и не доступен
+    // для записи — сообщение «не смонтирован» точнее, чем «нет прав».
+    const notMounted = await fs.access(path.join(this.root, NOT_MOUNTED)).then(
+      () => true,
+      () => false,
+    );
+    if (notMounted) throw new Error('Сетевой диск не смонтирован (видна метка .NOT-MOUNTED точки монтирования)');
     await fs.access(this.root, fsc.R_OK | fsc.W_OK).catch(() => {
       throw new Error(`Каталог ${this.root} недоступен для записи`);
     });

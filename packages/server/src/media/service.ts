@@ -49,6 +49,7 @@ export function toMediaDto(row: MediaRow): MediaDto {
     durationSec: row.durationSec,
     url: mediaUrl(row),
     location: row.location,
+    mirrored: row.mirrored,
     thumbUrl: row.thumbPath ? `/thumbs/${row.id}?v=${row.sha256.slice(0, 8)}` : null,
     warnings: row.warnings,
     createdAt: row.createdAt,
@@ -125,8 +126,12 @@ export class MediaService {
     // Файлы удаляем после БД: даже если SMB сейчас недоступен, запись уже не мешает
     // (на SMB останется «сирота» — это безопаснее, чем висящая запись).
     const storage = this.ctx.storage;
-    await fs.rm(storage.absIn(row.location, row.relPath), { recursive: true, force: true }).catch(() => undefined);
-    if (row.thumbPath) await fs.rm(storage.absIn(row.location, row.thumbPath), { force: true }).catch(() => undefined);
+    const places: MediaLocation[] = [row.location];
+    if (row.location === 'primary' && row.mirrored && storage.localRoot) places.push('local');
+    for (const loc of places) {
+      await fs.rm(storage.absIn(loc, row.relPath), { recursive: true, force: true }).catch(() => undefined);
+      if (row.thumbPath) await fs.rm(storage.absIn(loc, row.thumbPath), { force: true }).catch(() => undefined);
+    }
     this.ctx.events.changed('media');
     if (used.length > 0) this.ctx.events.changed('playlists');
   }
@@ -263,6 +268,8 @@ export class MediaService {
         .get();
       this.ctx.audit.write(input.user, 'upload', 'media', row.id, { title, type, size, location });
       this.ctx.events.changed('media');
+      // Копия в зеркало на диске VM — в фоне.
+      if (location === 'primary') void this.ctx.mediaSync.run();
       return toMediaDto(row);
     } finally {
       await fs.rm(tmpFile, { force: true }).catch(() => undefined);

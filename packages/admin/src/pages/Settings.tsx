@@ -79,6 +79,25 @@ export function SettingsPage() {
                   <span className="muted">выключен</span>
                 )}
               </dd>
+              <dt>Копия медиатеки</dt>
+              <dd>
+                {status.mirror.enabled ? (
+                  <>
+                    {status.mirror.mirrored} из {status.mirror.total} файлов
+                    {status.mirror.mirrored === status.mirror.total ? (
+                      <span className="badge badge-on" style={{ marginLeft: 6 }}>полная</span>
+                    ) : (
+                      <span className="badge badge-warn" style={{ marginLeft: 6 }}>
+                        {status.storageAvailable ? 'копируется' : 'неполная'}
+                      </span>
+                    )}
+                    {status.mirror.problem && <div className="small" style={{ color: 'var(--warning)' }}>{status.mirror.problem}</div>}
+                    <div className="small muted">без SMB сервер отдаёт файлы отсюда</div>
+                  </>
+                ) : (
+                  <span className="muted">выключена (storage.localMirror)</span>
+                )}
+              </dd>
               <dt>Ждут переноса на SMB</dt>
               <dd>{status.localPending}</dd>
               <dt>Загрузка сейчас</dt>
