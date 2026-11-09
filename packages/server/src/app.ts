@@ -4,13 +4,14 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Config } from './config/index.js';
 import { Database } from './db/index.js';
 import { media } from './db/schema.js';
 import { AppEvents } from './events.js';
 import { MediaStorage } from './media/storage.js';
 import { MediaService } from './media/service.js';
+import { MediaSync } from './media/sync.js';
 import { mediaAdminRoutes } from './media/routes.js';
 import { mediaServeRoutes } from './media/serve.js';
 import { AuditService } from './audit/index.js';
@@ -37,6 +38,7 @@ export interface AppContext {
   storage: MediaStorage;
   audit: AuditService;
   media: MediaService;
+  mediaSync: MediaSync;
   screens: ScreensService;
   hub: PlayerHub;
   adminHub: AdminHub;
@@ -65,10 +67,16 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   });
 
   const db = new Database(config.storage.dbPath);
-  const storage = new MediaStorage(config.storage.mediaPath, app.log, () => {
-    const row = db.orm.select({ n: sql<number>`count(*)` }).from(media).get();
-    return (row?.n ?? 0) > 0;
-  });
+  const storage = new MediaStorage(
+    config.storage.mediaPath,
+    app.log,
+    () => {
+      const row = db.orm.select({ n: sql<number>`count(*)` }).from(media).where(eq(media.location, 'primary')).get();
+      return (row?.n ?? 0) > 0;
+    },
+    config.storage.localFallbackPath,
+    config.storage.localMinFreeMb * 1024 * 1024,
+  );
   const ctx = {
     config,
     log: app.log,
@@ -79,6 +87,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     version: VERSION,
   } as AppContext;
   ctx.media = new MediaService(ctx);
+  ctx.mediaSync = new MediaSync(ctx);
   ctx.screens = new ScreensService(ctx);
   ctx.hub = new PlayerHub(ctx);
   ctx.playback = new PlaybackService(ctx);
@@ -88,6 +97,10 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   app.decorate('ctx', ctx);
 
   storage.onChange(() => ctx.events.emit('status'));
+  // После каждой успешной проверки SMB переносим туда файлы, сохранённые на диск VM.
+  storage.onCheck((ok) => {
+    if (ok) void ctx.mediaSync.run();
+  });
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) {
@@ -109,11 +122,24 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
 
   app.get('/', async (_req, reply) => reply.redirect('/admin/'));
 
+  // 200 — сервер выполняет свою работу (БД жива и загружать есть куда: SMB или диск VM).
+  // status=degraded — SMB недоступен, но работает резерв.
   app.get('/health', async (_req, reply) => {
     const dbOk = db.isHealthy();
     const storageOk = await storage.check();
-    const body = { status: dbOk && storageOk ? 'ok' : 'degraded', db: dbOk, storage: storageOk, storageError: storage.error, version: VERSION };
-    return reply.code(dbOk && storageOk ? 200 : 503).send(body);
+    let fallbackOk = false;
+    if (!storageOk) fallbackOk = await storage.uploadTarget().then(() => true, () => false);
+    const healthy = dbOk && (storageOk || fallbackOk);
+    const body = {
+      status: dbOk && storageOk ? 'ok' : healthy ? 'degraded' : 'down',
+      db: dbOk,
+      storage: storageOk,
+      storageError: storage.error,
+      localFallback: storage.localRoot ? fallbackOk || storageOk : null,
+      localPending: ctx.mediaSync.pendingCount(),
+      version: VERSION,
+    };
+    return reply.code(healthy ? 200 : 503).send(body);
   });
 
   await app.register(mediaServeRoutes);

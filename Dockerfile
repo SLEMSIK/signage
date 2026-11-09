@@ -39,7 +39,7 @@ COPY packages/server/drizzle packages/server/drizzle
 COPY --from=build /app/packages/server/dist packages/server/dist
 COPY --from=build /app/packages/admin/dist packages/admin/dist
 COPY --from=build /app/packages/player/dist packages/player/dist
-RUN mkdir -p /data/media /data/db && chown -R node:node /data
+RUN mkdir -p /data/media /data/local-media /data/db && chown -R node:node /data
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \

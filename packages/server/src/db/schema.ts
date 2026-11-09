@@ -30,7 +30,9 @@ export const media = sqliteTable('media', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   type: text('type', { enum: ['image', 'video', 'html', 'html_zip'] }).notNull(),
   title: text('title').notNull(),
-  /** Путь относительно storage.mediaPath. Для html_zip — каталог пакета. */
+  /** primary — сетевой диск (storage.mediaPath), local — резервный каталог на диске VM. */
+  location: text('location', { enum: ['primary', 'local'] }).notNull().default('primary'),
+  /** Путь относительно корня хранилища (location). Для html_zip — каталог пакета. */
   relPath: text('rel_path').notNull(),
   /** Для html_zip — путь к index.html внутри каталога пакета. */
   entry: text('entry'),

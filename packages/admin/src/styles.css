@@ -343,6 +343,18 @@ input[type='checkbox'] {
   color: #fff;
 }
 
+.banner-warn {
+  background: var(--warning-soft);
+  color: #6b4700;
+  border: 1px solid #f0d68a;
+}
+
+.banner-info {
+  background: var(--primary-soft);
+  color: #0b4bb3;
+  border: 1px solid #bcd4fb;
+}
+
 /* ---- badges ---- */
 .badge {
   display: inline-flex;

@@ -31,7 +31,8 @@ export function MediaPage() {
   const [deleting, setDeleting] = useState<{ media: MediaDto; playlists: { id: number; name: string }[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const storageOk = status?.storageAvailable !== false;
+  // Загружать можно, если есть куда: на сетевой диск или, при его недоступности, на диск сервера.
+  const storageOk = status ? status.uploadTarget !== null : true;
 
   const load = useCallback(() => {
     api<MediaDto[]>('/media')
@@ -150,12 +151,21 @@ export function MediaPage() {
         {storageOk ? (
           <>
             <strong>Перетащите файлы сюда</strong> или нажмите, чтобы выбрать
+            {status?.uploadTarget === 'local' && (
+              <div className="small" style={{ color: 'var(--warning)' }}>
+                Сетевой диск недоступен — файлы будут сохранены на диск сервера
+                {status.localFreeMb !== null ? ` (свободно ${formatBytes(status.localFreeMb * 1024 * 1024)})` : ''}
+              </div>
+            )}
             <div className="small">
               Изображения (jpg, png, webp, gif), видео (mp4 H.264, webm), HTML-файл или zip-пакет с index.html. До {status?.maxUploadMb ?? '…'} МБ.
             </div>
           </>
         ) : (
-          <strong>Загрузка недоступна: хранилище не подключено</strong>
+          <>
+            <strong>Загрузка недоступна</strong>
+            <div className="small">{status?.uploadBlockedReason ?? 'Хранилище не подключено'}</div>
+          </>
         )}
         <input
           ref={input}
@@ -225,7 +235,12 @@ export function MediaPage() {
                   {formatBytes(m.size)}
                   {m.durationSec ? ` · ${formatDuration(m.durationSec)}` : ''}
                 </div>
-                {m.warnings.length > 0 && (
+                {m.location === 'local' && (
+                  <div className="small" style={{ color: 'var(--warning)' }} title="Сетевой диск был недоступен. Файл будет перенесён автоматически.">
+                    ⏳ на диске сервера, ждёт переноса
+                  </div>
+                )}
+                {m.warnings.filter((w) => !w.startsWith('Сетевой диск был недоступен')).length > 0 && (
                   <div className="small" style={{ color: 'var(--warning)' }} title={m.warnings.join('\n')}>
                     ⚠ есть предупреждения
                   </div>

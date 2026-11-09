@@ -29,6 +29,8 @@ export async function createTestApp(patch?: (c: Config) => void): Promise<TestAp
       mediaPath: path.join(dir, 'media'),
       dbPath: path.join(dir, 'db', 'test.sqlite'),
       backupPath: path.join(dir, 'media', '_backup'),
+      localFallbackPath: path.join(dir, 'local'),
+      localMinFreeMb: 0,
     },
     proxy: { allowlist: ['api.example.com'], cacheTtlSec: 60 },
   });

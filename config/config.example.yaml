@@ -23,6 +23,11 @@ storage:
   mediaPath: /data/media          # точка монтирования SMB внутри контейнера
   dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
   backupPath: /data/media/_backup # куда класть ежедневный бэкап БД
+  # Резерв на диске VM: если SMB недоступен, загрузки сохраняются сюда и
+  # автоматически переносятся на SMB, когда он вернётся. null — отключить резерв
+  # (тогда при недоступном SMB загрузка блокируется).
+  localFallbackPath: /data/local-media
+  localMinFreeMb: 2048            # не писать на диск VM, если свободно меньше
   backupTime: "03:30"             # время ежедневного бэкапа (server.timezone)
   backupKeep: 14                  # сколько копий хранить
   maxUploadMb: 500

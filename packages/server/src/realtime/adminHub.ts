@@ -16,6 +16,9 @@ export class AdminHub {
       }
     });
     ctx.events.on('status', () => void this.sendStatus());
+    ctx.events.on('changed', (entity) => {
+      if (entity === 'media') void this.sendStatus();
+    });
   }
 
   handle(socket: WebSocket): void {
@@ -24,7 +27,9 @@ export class AdminHub {
     socket.on('error', () => this.sockets.delete(socket));
     this.send(socket, { type: 'screens', screens: this.ctx.screens.list() });
     this.send(socket, { type: 'pending', codes: this.ctx.hub.pendingCount });
-    void systemStatus(this.ctx).then((status) => this.send(socket, { type: 'status', status }));
+    void systemStatus(this.ctx)
+      .then((status) => this.send(socket, { type: 'status', status }))
+      .catch(() => undefined);
   }
 
   private send(socket: WebSocket, ev: AdminEvent): void {
@@ -51,10 +56,18 @@ export class AdminHub {
   }
 
   async sendStatus(): Promise<void> {
-    this.broadcast({ type: 'status', status: await systemStatus(this.ctx) });
+    if (this.sockets.size === 0 || this.stopped) return;
+    try {
+      this.broadcast({ type: 'status', status: await systemStatus(this.ctx) });
+    } catch (err) {
+      this.ctx.log.debug({ err }, 'status broadcast failed');
+    }
   }
 
+  private stopped = false;
+
   stop(): void {
+    this.stopped = true;
     if (this.screensTimer) clearTimeout(this.screensTimer);
     for (const s of this.sockets) s.close(1001);
   }

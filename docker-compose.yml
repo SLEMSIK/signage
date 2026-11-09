@@ -9,6 +9,7 @@ services:
     volumes:
       - ./config/config.yaml:/config/config.yaml:ro
       - media:/data/media
+      - local_media:/data/local-media
       - db:/data/db
     environment:
       CONFIG_PATH: /config/config.yaml
@@ -26,5 +27,8 @@ volumes:
       type: cifs
       device: "//${SMB_HOST}/${SMB_SHARE}"
       o: "username=${SMB_USER},password=${SMB_PASSWORD},vers=${SMB_VERS:-3.0},uid=1000,gid=1000,file_mode=0664,dir_mode=0775,soft,nobrl"
+  # Резерв на диске VM: сюда пишутся загрузки, пока SMB недоступен,
+  # потом сервер сам переносит их на SMB.
+  local_media: {}
   # База SQLite — только локально: на SMB ломаются блокировки.
   db: {}

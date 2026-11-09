@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { HttpError, idParam, notFound, parse } from '../util/http.js';
 import { injectSignage, SIGNAGE_SCRIPT } from './html.js';
+import type { MediaLocation } from './storage.js';
 
 const SCRIPT_VERSION = createHash('sha256').update(SIGNAGE_SCRIPT).digest('hex').slice(0, 8);
 
@@ -26,8 +27,8 @@ export async function mediaServeRoutes(app: FastifyInstance): Promise<void> {
     return false;
   };
 
-  const requireStorage = () => {
-    if (!storage.available) throw new HttpError(503, 'Хранилище недоступно');
+  const requireStorage = (location: MediaLocation) => {
+    if (!storage.canRead(location)) throw new HttpError(503, 'Хранилище недоступно');
   };
 
   const sendOpts = { etag: false, lastModified: false, cacheControl: false } as const;
@@ -37,21 +38,21 @@ export async function mediaServeRoutes(app: FastifyInstance): Promise<void> {
     const { v } = parse(z.object({ v: z.string().optional() }), req.query);
     const row = app.ctx.media.get(id);
     if (row.type === 'html' || row.type === 'html_zip') return reply.redirect(`/content/${id}/index.html`);
-    requireStorage();
+    requireStorage(row.location);
     const versioned = v !== undefined && v === row.sha256.slice(0, 8);
     reply.header('Cache-Control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache');
     if (notModified(req, reply, `"${row.sha256}"`)) return reply;
-    return reply.sendFile(row.relPath, storage.root, sendOpts);
+    return reply.sendFile(row.relPath, storage.rootOf(row.location), sendOpts);
   });
 
   app.get('/thumbs/:id', async (req, reply) => {
     const { id } = parse(idParam, req.params);
     const row = app.ctx.media.get(id);
     if (!row.thumbPath) throw notFound('Нет превью');
-    requireStorage();
+    requireStorage(row.location);
     reply.header('Cache-Control', 'public, max-age=86400');
     if (notModified(req, reply, `"t-${row.sha256}"`)) return reply;
-    return reply.sendFile(row.thumbPath, storage.root, sendOpts);
+    return reply.sendFile(row.thumbPath, storage.rootOf(row.location), sendOpts);
   });
 
   // HTML и HTML-пакеты. В каждую HTML-страницу добавляется window.signage.
@@ -60,7 +61,8 @@ export async function mediaServeRoutes(app: FastifyInstance): Promise<void> {
     const { id } = parse(idParam, { id: params.id });
     const row = app.ctx.media.get(id);
     if (row.type !== 'html' && row.type !== 'html_zip') throw notFound();
-    requireStorage();
+    requireStorage(row.location);
+    const root = storage.rootOf(row.location);
 
     let rel = decodeURIComponent(params['*'] || 'index.html');
     if (rel.endsWith('/')) rel += 'index.html';
@@ -69,10 +71,10 @@ export async function mediaServeRoutes(app: FastifyInstance): Promise<void> {
       if (rel !== 'index.html') throw notFound();
       fileRel = row.relPath;
     } else {
-      const base = storage.abs(row.relPath);
+      const base = storage.absIn(row.location, row.relPath);
       const target = path.resolve(base, rel);
       if (!target.startsWith(base + path.sep)) throw notFound();
-      fileRel = path.relative(storage.root, target);
+      fileRel = path.relative(root, target);
     }
 
     // Содержимое media id никогда не меняется — ETag от sha256 пакета + путь.
@@ -85,13 +87,13 @@ export async function mediaServeRoutes(app: FastifyInstance): Promise<void> {
     if (isHtml) {
       let html: string;
       try {
-        html = await fs.readFile(storage.abs(fileRel), 'utf8');
+        html = await fs.readFile(storage.absIn(row.location, fileRel), 'utf8');
       } catch {
         throw notFound();
       }
       return reply.type('text/html; charset=utf-8').send(injectSignage(html));
     }
-    return reply.sendFile(fileRel, storage.root, sendOpts);
+    return reply.sendFile(fileRel, root, sendOpts);
   });
 
   app.get('/content/:id', async (req, reply) => reply.redirect(`/content/${(req.params as { id: string }).id}/index.html`));

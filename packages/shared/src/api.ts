@@ -25,6 +25,8 @@ export interface MediaDto {
   sha256: string;
   durationSec: number | null;
   url: string;
+  /** primary — на сетевом диске, local — временно на диске сервера (ждёт переноса). */
+  location: 'primary' | 'local';
   thumbUrl: string | null;
   warnings: string[];
   createdAt: number;
@@ -162,6 +164,16 @@ export interface SystemStatus {
   version: string;
   storageAvailable: boolean;
   storageError: string | null;
+  /** Включён ли резервный каталог на диске сервера. */
+  localFallback: boolean;
+  /** Куда сейчас пойдёт загрузка; null — загрузить некуда. */
+  uploadTarget: 'primary' | 'local' | null;
+  /** Почему загрузка невозможна (если uploadTarget = null). */
+  uploadBlockedReason: string | null;
+  /** Сколько файлов лежит на диске сервера и ждёт переноса на сетевой диск. */
+  localPending: number;
+  /** Свободно на диске сервера, МБ (для резерва). */
+  localFreeMb: number | null;
   serverTime: number;
   timezone: string;
   ffmpeg: boolean;

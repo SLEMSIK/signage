@@ -123,7 +123,9 @@ volumes:
 
 **Важно:** SQLite нельзя держать на SMB, там ломаются блокировки. БД хранится на локальном volume `db`. Раз в сутки и при старте делается бэкап (`VACUUM INTO`) в `storage.backupPath` на SMB. Ротация — 14 копий.
 
-Если SMB недоступен, сервер не падает. В админке появляется баннер «Хранилище недоступно», загрузка блокируется, а плееры продолжают играть из своего кэша.
+Если SMB недоступен, сервер не падает, плееры продолжают играть из своего кэша.
+
+**Резерв на диске VM.** Пока SMB недоступен, новые загрузки сохраняются в `storage.localFallbackPath` (Docker-volume `local_media` на диске VM). У медиафайла в БД есть поле `location` (`primary` — SMB, `local` — диск VM); относительный путь одинаков в обоих местах, поэтому URL не меняются. После каждой успешной проверки SMB (раз в 30 с и в `/health`) сервер переносит локальные файлы на SMB: копия во временный путь → проверка (sha256 для файла, состав и размеры для zip-пакета) → rename → `location = primary` → удаление локальной копии. Если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка отклоняется. В админке при этом жёлтый баннер «Сетевое хранилище недоступно — файлы сохраняются на диск сервера (ждут переноса: N)». Если `localFallbackPath: null`, резерв выключен и загрузка при недоступном SMB блокируется (красный баннер).
 
 ## Роли
 
@@ -144,7 +146,7 @@ volumes:
 
 - `groups` — id, name
 - `screens` — id, name, group_id (nullable), token_hash, pairing_code, status, last_seen_at, current_item (json), fit_default (`contain`|`cover`), sync_mode (bool, берётся из группы), created_at
-- `media` — id, type (`image`|`video`|`html`|`html_zip`), title, rel_path (относительно mediaPath), entry (для zip — путь к index.html), size, sha256, duration_sec (для видео — автоматически через ffprobe; иначе null), thumb_path, created_at, created_by
+- `media` — id, type (`image`|`video`|`html`|`html_zip`), title, location (`primary`|`local`), rel_path (относительно корня хранилища), entry (для zip — путь к index.html), size, sha256, duration_sec (для видео — автоматически через ffprobe; иначе null), thumb_path, created_at, created_by
 - `playlists` — id, name, created_at, updated_at
 - `playlist_items` — id, playlist_id, media_id, position, duration_sec (null — по умолчанию; для видео — длина ролика), fit (`contain`|`cover`|`stretch`), transition (`none`|`fade`)
 - `schedules` — id, target_type (`screen`|`group`), target_id, playlist_id (null — чёрный экран), days (битовая маска Пн..Вс), start_time `HH:MM`, end_time `HH:MM` (поддержать переход через полночь: 22:00–02:00), priority (int), enabled

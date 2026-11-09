@@ -52,10 +52,24 @@ function Shell() {
         </div>
       </aside>
       <main className="main">
-        {status && !status.storageAvailable && (
+        {status && !status.storageAvailable && status.uploadTarget === 'local' && (
+          <div className="banner banner-warn">
+            <strong>Сетевое хранилище недоступно.</strong> Новые файлы сохраняются на диск сервера и будут перенесены на сетевой диск
+            автоматически, когда он появится{status.localPending > 0 ? ` (ждут переноса: ${status.localPending})` : ''}. Экраны продолжают играть
+            из своего кэша.
+            {status.storageError && <div className="small">{status.storageError}</div>}
+          </div>
+        )}
+        {status && !status.storageAvailable && status.uploadTarget !== 'local' && (
           <div className="banner banner-error">
             <strong>Хранилище недоступно.</strong> Загрузка медиа заблокирована, экраны продолжают играть из своего кэша.
+            {status.uploadBlockedReason && <div className="small">{status.uploadBlockedReason}</div>}
             {status.storageError && <div className="small">{status.storageError}</div>}
+          </div>
+        )}
+        {status && status.storageAvailable && status.localPending > 0 && (
+          <div className="banner banner-info">
+            Сетевой диск снова доступен — переносим на него файлы с диска сервера (осталось: {status.localPending}).
           </div>
         )}
         <Routes>

@@ -120,11 +120,4 @@ describe('media library', () => {
     expect(del.statusCode).toBe(200);
     expect((await t.app.inject({ url: image.url })).statusCode).toBe(404);
   });
-
-  it('blocks uploads when storage is unavailable', async () => {
-    t.app.ctx.storage.available = false;
-    const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#00f' } }).png().toBuffer();
-    expect((await upload('x.png', png)).statusCode).toBe(503);
-    t.app.ctx.storage.available = true;
-  });
 });

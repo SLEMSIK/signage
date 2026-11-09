@@ -43,6 +43,13 @@ export const configSchema = z.object({
     mediaPath: z.string().default('/data/media'),
     dbPath: z.string().default('/data/db/signage.sqlite'),
     backupPath: z.string().default('/data/media/_backup'),
+    /**
+     * Резервный каталог на диске VM: сюда сохраняются загрузки, пока SMB недоступен,
+     * потом файлы автоматически переносятся на SMB. null — резерв выключен.
+     */
+    localFallbackPath: z.string().nullable().default('/data/local-media'),
+    /** Не принимать загрузки на диск VM, если свободного места меньше. */
+    localMinFreeMb: z.number().nonnegative().default(2048),
     maxUploadMb: z.number().positive().default(500),
     /** Лимит размера zip после распаковки. */
     maxUnzippedMb: z.number().positive().default(1000),
@@ -95,6 +102,8 @@ export function parseConfig(yamlText: string, baseDir: string): Config {
   cfg.storage.mediaPath = abs(cfg.storage.mediaPath);
   cfg.storage.dbPath = abs(cfg.storage.dbPath);
   cfg.storage.backupPath = abs(cfg.storage.backupPath);
+  if (cfg.storage.localFallbackPath) cfg.storage.localFallbackPath = abs(cfg.storage.localFallbackPath);
+  else cfg.storage.localFallbackPath = null;
   cfg.server.publicUrl = cfg.server.publicUrl.replace(/\/+$/, '');
   cfg.proxy.allowlist = cfg.proxy.allowlist.map((d) => d.toLowerCase());
   return cfg;

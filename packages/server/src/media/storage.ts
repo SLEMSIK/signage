@@ -22,9 +22,20 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   });
 }
 
+/** Где лежит файл: основное хранилище (SMB) или резервный каталог на диске VM. */
+export type MediaLocation = 'primary' | 'local';
+
+function safeJoin(root: string, rel: string): string {
+  const full = path.resolve(root, rel);
+  if (full !== root && !full.startsWith(root + path.sep)) throw new Error('Путь вне хранилища');
+  return full;
+}
+
 /**
  * Медиа-хранилище (сетевой диск SMB). Если оно недоступно, сервер продолжает
- * работать: загрузка блокируется, плееры играют из своего кэша.
+ * работать: новые файлы сохраняются в резервный каталог на диске VM
+ * (если он задан) и переносятся на SMB, когда тот снова доступен.
+ * Плееры всё это время играют из своего кэша.
  *
  * Чтобы отличить «SMB не смонтирован, видим пустую локальную папку» от
  * «новое пустое хранилище», в корне лежит файл-маркер.
@@ -34,18 +45,69 @@ export class MediaStorage {
   error: string | null = 'Проверка ещё не выполнялась';
   private timer: NodeJS.Timeout | null = null;
   private listeners = new Set<(available: boolean) => void>();
+  private checkListeners = new Set<(available: boolean) => void>();
 
   constructor(
     readonly root: string,
     private readonly log: FastifyBaseLogger,
-    /** Есть ли в БД медиафайлы — если есть, а маркера нет, хранилище считаем чужим/несмонтированным. */
+    /** Есть ли в БД медиафайлы на SMB — если есть, а маркера нет, хранилище считаем несмонтированным. */
     private readonly hasMediaRecords: () => boolean,
+    /** Резервный каталог на диске VM; null — резерв выключен. */
+    readonly localRoot: string | null = null,
+    /** Минимум свободного места на диске VM, чтобы принимать туда загрузки. */
+    private readonly localMinFreeBytes = 2 * 1024 ** 3,
   ) {}
 
   abs(rel: string): string {
-    const full = path.resolve(this.root, rel);
-    if (full !== this.root && !full.startsWith(this.root + path.sep)) throw new Error('Путь вне хранилища');
-    return full;
+    return safeJoin(this.root, rel);
+  }
+
+  rootOf(location: MediaLocation): string {
+    if (location === 'primary') return this.root;
+    if (!this.localRoot) throw new Error('Резервное хранилище не настроено');
+    return this.localRoot;
+  }
+
+  absIn(location: MediaLocation, rel: string): string {
+    return safeJoin(this.rootOf(location), rel);
+  }
+
+  /** Можно ли сейчас читать файлы из этого места. */
+  canRead(location: MediaLocation): boolean {
+    return location === 'primary' ? this.available : this.localRoot !== null;
+  }
+
+  /** Свободное место на диске VM (байт) или null, если резерв выключен/недоступен. */
+  async localFreeBytes(): Promise<number | null> {
+    if (!this.localRoot) return null;
+    try {
+      await fs.mkdir(this.localRoot, { recursive: true });
+      const st = await fs.statfs(this.localRoot);
+      return st.bavail * st.bsize;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Куда сохранять новую загрузку: SMB, если он доступен, иначе диск VM.
+   * Бросает ошибку с понятным текстом, если сохранить некуда.
+   */
+  async uploadTarget(): Promise<MediaLocation> {
+    if (this.available) return 'primary';
+    if (!this.localRoot) throw new Error('Хранилище недоступно — загрузка временно невозможна');
+    const free = await this.localFreeBytes();
+    if (free === null) throw new Error('Хранилище недоступно, резервный каталог на сервере тоже недоступен');
+    if (free < this.localMinFreeBytes) {
+      throw new Error(`Хранилище недоступно, а на диске сервера осталось меньше ${Math.round(this.localMinFreeBytes / 1024 ** 2)} МБ`);
+    }
+    return 'local';
+  }
+
+  /** Вызывается после каждой проверки (а не только при смене статуса) — для фонового переноса. */
+  onCheck(fn: (available: boolean) => void): () => void {
+    this.checkListeners.add(fn);
+    return () => this.checkListeners.delete(fn);
   }
 
   onChange(fn: (available: boolean) => void): () => void {
@@ -70,6 +132,7 @@ export class MediaStorage {
       else this.log.warn({ root: this.root, error }, 'media storage unavailable');
       for (const fn of this.listeners) fn(ok);
     }
+    for (const fn of this.checkListeners) fn(ok);
     return ok;
   }
 

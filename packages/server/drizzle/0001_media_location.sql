@@ -1,0 +1,1 @@
+ALTER TABLE `media` ADD `location` text DEFAULT 'primary' NOT NULL;

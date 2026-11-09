@@ -13,6 +13,7 @@ import { badRequest, conflict, HttpError, notFound } from '../util/http.js';
 import { extractFrame, ffmpegAvailable, probeVideo } from './ffmpeg.js';
 import { externalRefWarnings } from './html.js';
 import { extractZip, ZipError } from './zip.js';
+import type { MediaLocation } from './storage.js';
 
 const EXT_TYPES: Record<string, MediaType> = {
   jpg: 'image',
@@ -47,6 +48,7 @@ export function toMediaDto(row: MediaRow): MediaDto {
     sha256: row.sha256,
     durationSec: row.durationSec,
     url: mediaUrl(row),
+    location: row.location,
     thumbUrl: row.thumbPath ? `/thumbs/${row.id}?v=${row.sha256.slice(0, 8)}` : null,
     warnings: row.warnings,
     createdAt: row.createdAt,
@@ -120,20 +122,25 @@ export class MediaService {
     }
     this.orm.delete(media).where(eq(media.id, id)).run();
     this.ctx.audit.write(user, 'delete', 'media', id, { title: row.title, type: row.type, playlists: used.map((p) => p.name) });
-    // Файлы удаляем после БД: даже если SMB сейчас недоступен, запись уже не мешает.
+    // Файлы удаляем после БД: даже если SMB сейчас недоступен, запись уже не мешает
+    // (на SMB останется «сирота» — это безопаснее, чем висящая запись).
     const storage = this.ctx.storage;
-    await fs.rm(storage.abs(row.relPath), { recursive: true, force: true }).catch(() => undefined);
-    if (row.thumbPath) await fs.rm(storage.abs(row.thumbPath), { force: true }).catch(() => undefined);
+    await fs.rm(storage.absIn(row.location, row.relPath), { recursive: true, force: true }).catch(() => undefined);
+    if (row.thumbPath) await fs.rm(storage.absIn(row.location, row.thumbPath), { force: true }).catch(() => undefined);
     this.ctx.events.changed('media');
     if (used.length > 0) this.ctx.events.changed('playlists');
   }
 
   async upload(input: UploadInput): Promise<MediaDto> {
     const { storage, config } = this.ctx;
-    if (!storage.available) {
+    let location: MediaLocation;
+    try {
+      location = await storage.uploadTarget();
+    } catch (err) {
       input.stream.resume();
-      throw new HttpError(503, 'Хранилище недоступно — загрузка временно невозможна');
+      throw new HttpError(503, (err as Error).message);
     }
+    const at = (rel: string) => storage.absIn(location, rel);
 
     const ext = path.extname(input.filename).slice(1).toLowerCase();
     const type = EXT_TYPES[ext];
@@ -143,7 +150,7 @@ export class MediaService {
     }
 
     const uuid = randomUUID();
-    const tmpDir = storage.abs('_tmp');
+    const tmpDir = at('_tmp');
     await fs.mkdir(tmpDir, { recursive: true });
     const tmpFile = path.join(tmpDir, `${uuid}.${ext}`);
     const hasher = new Hasher();
@@ -167,7 +174,7 @@ export class MediaService {
 
       if (type === 'html_zip') {
         relPath = `html/${uuid}`;
-        const dest = storage.abs(relPath);
+        const dest = at(relPath);
         try {
           const res = await extractZip(tmpFile, dest, {
             maxTotalBytes: config.storage.maxUnzippedMb * 1024 * 1024,
@@ -191,7 +198,7 @@ export class MediaService {
         await fs.rm(tmpFile, { force: true });
       } else {
         relPath = `${datedDir}/${uuid}.${ext}`;
-        const finalPath = storage.abs(relPath);
+        const finalPath = at(relPath);
 
         if (type === 'image') {
           try {
@@ -200,7 +207,7 @@ export class MediaService {
           } catch {
             throw badRequest('Файл не похож на изображение или повреждён');
           }
-          thumbPath = await this.makeThumb(uuid, () => sharp(tmpFile, { animated: false }).rotate());
+          thumbPath = await this.makeThumb(location, uuid, () => sharp(tmpFile, { animated: false }).rotate());
         } else if (type === 'video') {
           if (await ffmpegAvailable()) {
             try {
@@ -214,7 +221,7 @@ export class MediaService {
               }
               const at = durationSec ? Math.min(1, durationSec / 2) : 0;
               const frame = await extractFrame(tmpFile, at);
-              thumbPath = await this.makeThumb(uuid, () => sharp(frame));
+              thumbPath = await this.makeThumb(location, uuid, () => sharp(frame));
             } catch (err) {
               this.ctx.log.warn({ err }, 'video probe failed');
               warnings.push('Не удалось проанализировать видео (ffprobe). Длительность нужно задать вручную.');
@@ -231,10 +238,15 @@ export class MediaService {
         await fs.rename(tmpFile, finalPath);
       }
 
+      if (location === 'local') {
+        warnings.unshift('Сетевой диск был недоступен: файл сохранён на диск сервера и будет перенесён на сетевой диск автоматически.');
+      }
+
       const row = this.orm
         .insert(media)
         .values({
           type,
+          location,
           title,
           relPath,
           entry,
@@ -249,7 +261,7 @@ export class MediaService {
         })
         .returning()
         .get();
-      this.ctx.audit.write(input.user, 'upload', 'media', row.id, { title, type, size });
+      this.ctx.audit.write(input.user, 'upload', 'media', row.id, { title, type, size, location });
       this.ctx.events.changed('media');
       return toMediaDto(row);
     } finally {
@@ -257,9 +269,9 @@ export class MediaService {
     }
   }
 
-  private async makeThumb(uuid: string, source: () => Sharp): Promise<string | null> {
+  private async makeThumb(location: MediaLocation, uuid: string, source: () => Sharp): Promise<string | null> {
     const rel = `thumbs/${uuid}.webp`;
-    const abs = this.ctx.storage.abs(rel);
+    const abs = this.ctx.storage.absIn(location, rel);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     try {
       await source().resize(THUMB_W, THUMB_H, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 75 }).toFile(abs);
