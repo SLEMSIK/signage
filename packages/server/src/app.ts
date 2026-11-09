@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import fastifyCookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { sql } from 'drizzle-orm';
 import type { Config } from './config/index.js';
@@ -7,6 +9,9 @@ import { media } from './db/schema.js';
 import { MediaStorage } from './media/storage.js';
 import { AuditService } from './audit/index.js';
 import { HttpError } from './util/http.js';
+import { authPlugin, requireRole } from './auth/index.js';
+import { systemRoutes } from './system/routes.js';
+import { webPlugin } from './web.js';
 
 export const VERSION: string = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -58,6 +63,13 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     return reply.code(status).send({ error: status >= 500 ? 'Внутренняя ошибка сервера' : (err as Error).message });
   });
 
+  app.get('/', async (_req, reply) => reply.redirect('/admin/'));
+
+  await app.register(fastifyCookie);
+  // Декорирует reply.sendFile (используется для медиа и SPA-fallback).
+  await app.register(fastifyStatic, { root: config.storage.mediaPath, serve: false });
+  await authPlugin(app);
+
   app.get('/health', async (_req, reply) => {
     const dbOk = db.isHealthy();
     const storageOk = await storage.check();
@@ -65,7 +77,15 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     return reply.code(dbOk && storageOk ? 200 : 503).send(body);
   });
 
-  app.get('/', async (_req, reply) => reply.redirect('/admin/'));
+  await app.register(
+    async (api) => {
+      api.addHook('preHandler', requireRole('operator'));
+      await api.register(systemRoutes);
+    },
+    { prefix: '/api/admin' },
+  );
+
+  await app.register(webPlugin);
 
   if (background) storage.start();
   else await storage.check();
