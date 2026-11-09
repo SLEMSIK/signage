@@ -29,6 +29,9 @@ import { PlaylistsService } from './playlists/service.js';
 import { playlistsAdminRoutes } from './playlists/routes.js';
 import { scheduleAdminRoutes } from './schedule/routes.js';
 import { proxyRoutes } from './proxy/index.js';
+import { BackupService } from './backup/service.js';
+import { backupAdminRoutes } from './backup/routes.js';
+import { auditAdminRoutes } from './audit/routes.js';
 
 export const VERSION: string = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -48,6 +51,7 @@ export interface AppContext {
   hub: PlayerHub;
   adminHub: AdminHub;
   playback: PlaybackService;
+  backups: BackupService;
   version: string;
 }
 
@@ -98,6 +102,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   ctx.hub = new PlayerHub(ctx);
   ctx.playback = new PlaybackService(ctx);
   ctx.adminHub = new AdminHub(ctx);
+  ctx.backups = new BackupService(ctx);
   ctx.hub.onScreensChanged = () => ctx.adminHub.screensChanged();
   ctx.hub.onPendingChanged = () => ctx.adminHub.pendingChanged();
   app.decorate('ctx', ctx);
@@ -160,6 +165,8 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
       await api.register(screensAdminRoutes);
       await api.register(playlistsAdminRoutes);
       await api.register(scheduleAdminRoutes);
+      await api.register(backupAdminRoutes);
+      await api.register(auditAdminRoutes);
     },
     { prefix: '/api/admin' },
   );
@@ -170,6 +177,8 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     storage.start();
     ctx.hub.start();
     ctx.playback.start();
+    // Первая проверка хранилища асинхронная — бэкап при старте делаем после неё.
+    void storage.check().then(() => ctx.backups.start());
   } else {
     await storage.check();
     ctx.playback.recalculate();
@@ -177,6 +186,7 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
   }
 
   app.addHook('onClose', async () => {
+    ctx.backups.stop();
     ctx.playback.stop();
     ctx.hub.stop();
     ctx.adminHub.stop();

@@ -28,6 +28,11 @@ export async function systemStatus(ctx: AppContext): Promise<SystemStatus> {
     maxUploadMb: config.storage.maxUploadMb,
     defaultImageDurationSec: config.player.defaultImageDurationSec,
     defaultHtmlDurationSec: config.player.defaultHtmlDurationSec,
+    mediaPath: config.storage.mediaPath,
+    localFallbackPath: config.storage.localFallbackPath,
+    backupPath: config.storage.backupPath,
+    backupTime: config.storage.backupTime,
+    backupKeep: config.storage.backupKeep,
   };
 }
 

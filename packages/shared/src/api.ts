@@ -180,12 +180,19 @@ export interface SystemStatus {
   maxUploadMb: number;
   defaultImageDurationSec: number;
   defaultHtmlDurationSec: number;
+  mediaPath: string;
+  localFallbackPath: string | null;
+  backupPath: string;
+  backupTime: string;
+  backupKeep: number;
 }
 
 export interface BackupDto {
   name: string;
   size: number;
   createdAt: number;
+  /** primary — на сетевом диске, local — временно на диске сервера. */
+  location: 'primary' | 'local';
 }
 
 /** Сообщения, которые сервер шлёт админке по /api/admin/ws. */
