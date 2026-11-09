@@ -1,12 +1,17 @@
 import { readFileSync } from 'node:fs';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { sql } from 'drizzle-orm';
 import type { Config } from './config/index.js';
 import { Database } from './db/index.js';
 import { media } from './db/schema.js';
+import { AppEvents } from './events.js';
 import { MediaStorage } from './media/storage.js';
+import { MediaService } from './media/service.js';
+import { mediaAdminRoutes } from './media/routes.js';
+import { mediaServeRoutes } from './media/serve.js';
 import { AuditService } from './audit/index.js';
 import { HttpError } from './util/http.js';
 import { authPlugin, requireRole } from './auth/index.js';
@@ -19,9 +24,12 @@ export const VERSION: string = (
 
 export interface AppContext {
   config: Config;
+  log: FastifyBaseLogger;
   db: Database;
+  events: AppEvents;
   storage: MediaStorage;
   audit: AuditService;
+  media: MediaService;
   version: string;
 }
 
@@ -40,7 +48,7 @@ export interface BuildOptions {
 export async function buildApp(config: Config, opts: BuildOptions = {}): Promise<FastifyInstance> {
   const background = opts.background ?? true;
   const app = Fastify({
-    logger: opts.logger === false ? false : { level: process.env.LOG_LEVEL ?? 'info' },
+    logger: opts.logger === false && !process.env.TEST_LOG ? false : { level: process.env.LOG_LEVEL ?? 'info' },
     trustProxy: config.server.trustProxy,
     bodyLimit: 2 * 1024 * 1024,
   });
@@ -50,9 +58,19 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     const row = db.orm.select({ n: sql<number>`count(*)` }).from(media).get();
     return (row?.n ?? 0) > 0;
   });
-  const audit = new AuditService(db);
-  const ctx: AppContext = { config, db, storage, audit, version: VERSION };
+  const ctx = {
+    config,
+    log: app.log,
+    db,
+    events: new AppEvents(),
+    storage,
+    audit: new AuditService(db),
+    version: VERSION,
+  } as AppContext;
+  ctx.media = new MediaService(ctx);
   app.decorate('ctx', ctx);
+
+  storage.onChange(() => ctx.events.emit('status'));
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) {
@@ -63,12 +81,15 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     return reply.code(status).send({ error: status >= 500 ? 'Внутренняя ошибка сервера' : (err as Error).message });
   });
 
-  app.get('/', async (_req, reply) => reply.redirect('/admin/'));
-
   await app.register(fastifyCookie);
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: config.storage.maxUploadMb * 1024 * 1024, files: 1, fields: 5 },
+  });
   // Декорирует reply.sendFile (используется для медиа и SPA-fallback).
   await app.register(fastifyStatic, { root: config.storage.mediaPath, serve: false });
   await authPlugin(app);
+
+  app.get('/', async (_req, reply) => reply.redirect('/admin/'));
 
   app.get('/health', async (_req, reply) => {
     const dbOk = db.isHealthy();
@@ -77,10 +98,13 @@ export async function buildApp(config: Config, opts: BuildOptions = {}): Promise
     return reply.code(dbOk && storageOk ? 200 : 503).send(body);
   });
 
+  await app.register(mediaServeRoutes);
+
   await app.register(
     async (api) => {
       api.addHook('preHandler', requireRole('operator'));
       await api.register(systemRoutes);
+      await api.register(mediaAdminRoutes);
     },
     { prefix: '/api/admin' },
   );

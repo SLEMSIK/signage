@@ -6,3 +6,4 @@ config/config.yaml
 data/
 coverage/
 .DS_Store
+.claude/launch.json
