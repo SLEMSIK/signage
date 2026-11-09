@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import type { GroupDto, MediaDto, OverrideDto, PlaylistDto, ScreenDto } from '@signage/shared';
 import { createTestApp, type TestApp } from '../test-utils/app.js';
-import { FakePlayer, listenAndPair } from '../test-utils/fakePlayer.js';
+import type { FakePlayer} from '../test-utils/fakePlayer.js';
+import { listenAndPair } from '../test-utils/fakePlayer.js';
 
 describe('schedules, overrides and group sync', () => {
   let t: TestApp;
