@@ -1,0 +1,38 @@
+{
+  "name": "signage",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Digital signage для локальной сети учреждения",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/admin",
+    "packages/player"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build:shared": "npm run build -w @signage/shared",
+    "build": "npm run build:shared && npm run build -w @signage/admin && npm run build -w @signage/player && npm run build -w @signage/server",
+    "dev": "npm run build:shared && npm run dev -w @signage/server",
+    "dev:admin": "npm run dev -w @signage/admin",
+    "dev:player": "npm run dev -w @signage/player",
+    "start": "node packages/server/dist/index.js",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "hash-password": "tsx packages/server/src/cli/hash-password.ts",
+    "db:generate": "npm run db:generate -w @signage/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "eslint": "^10.14.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}

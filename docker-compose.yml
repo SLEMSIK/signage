@@ -1,0 +1,30 @@
+services:
+  signage:
+    build: .
+    image: signage:latest
+    container_name: signage
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./config/config.yaml:/config/config.yaml:ro
+      - media:/data/media
+      - db:/data/db
+    environment:
+      CONFIG_PATH: /config/config.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  # Медиатека на сетевом диске. Смена адреса SMB — правка .env.
+  media:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${SMB_HOST}/${SMB_SHARE}"
+      o: "username=${SMB_USER},password=${SMB_PASSWORD},vers=${SMB_VERS:-3.0},uid=1000,gid=1000,file_mode=0664,dir_mode=0775,soft,nobrl"
+  # База SQLite — только локально: на SMB ломаются блокировки.
+  db: {}

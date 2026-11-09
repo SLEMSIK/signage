@@ -1,0 +1,41 @@
+# Конфигурация сервера Signage.
+# Скопируйте в config/config.yaml и заполните. Файл монтируется в контейнер read-only.
+
+server:
+  port: 8080
+  publicUrl: "http://10.33.44.20:8080"   # адрес, по которому плееры видят сервер
+  timezone: "Europe/Moscow"              # время расписания считается в этом поясе
+  sessionSecret: "change-me-to-a-long-random-string"   # минимум 16 символов: openssl rand -hex 32
+  sessionTtlHours: 12
+  allowedNetworks: ["10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"]  # остальным 403
+  trustProxy: false                      # true, если перед сервером reverse proxy
+
+users:
+  # Хэш пароля: npm run hash-password (или см. docs/deploy.md для Docker)
+  - login: admin
+    role: admin
+    passwordHash: "$2b$10$REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_M"
+  - login: operator
+    role: operator
+    passwordHash: "$2b$10$REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_M"
+
+storage:
+  mediaPath: /data/media          # точка монтирования SMB внутри контейнера
+  dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
+  backupPath: /data/media/_backup # куда класть ежедневный бэкап БД
+  backupTime: "03:30"             # время ежедневного бэкапа (server.timezone)
+  backupKeep: 14                  # сколько копий хранить
+  maxUploadMb: 500
+  maxUnzippedMb: 1000             # лимит HTML-пакета после распаковки
+
+proxy:
+  allowlist:                      # домены, которые HTML-контент может запрашивать через сервер
+    - "api.open-meteo.com"
+    - "www.cbr-xml-daily.ru"
+  cacheTtlSec: 300
+
+player:
+  heartbeatSec: 15
+  offlineAfterSec: 45
+  defaultImageDurationSec: 10
+  defaultHtmlDurationSec: 30
