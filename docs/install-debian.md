@@ -76,7 +76,7 @@
 | Full name / Username / Password | ваш администратор, например `itadmin` |
 | Clock | часовой пояс — Москва |
 | **Partitioning** | Guided – use entire disk → выбранный диск → **All files in one partition** → Finish partitioning → Yes |
-| Package manager | зеркало: Russian Federation → `deb.debian.org`; HTTP proxy — пусто, если нет прокси |
+| **Package manager** | «Scan extra installation media» — No; **Use a network mirror — Yes** → Russian Federation → `deb.debian.org`; HTTP proxy — пусто, если нет прокси. ⚠ Без зеркала apt потом не найдёт пакеты (см. [Неполадки](#15-неполадки)) |
 | Popularity contest | No |
 | **Software selection** | ❌ Debian desktop environment, ❌ GNOME (и любые другие рабочие столы), ✅ **SSH server**, ✅ **standard system utilities** |
 | GRUB | Yes → `/dev/sda` |
@@ -446,6 +446,7 @@ sudo umount /srv/signage-smb/share
 
 | Симптом | Причина и решение |
 |---|---|
+| `apt install` → «Невозможно найти пакет», `apt update` ругается на `cdrom://` | При установке не выбрано сетевое зеркало. От root: `echo "deb http://deb.debian.org/debian trixie main contrib non-free-firmware" > /etc/apt/sources.list`, затем ещё две строки через `>>`: `deb http://deb.debian.org/debian trixie-updates main contrib non-free-firmware` и `deb http://security.debian.org/debian-security trixie-security main contrib non-free-firmware`; потом `apt update` |
 | `sudo: command not found` / «user is not in the sudoers file» | При установке задан пароль root: `su -`, затем `apt install -y sudo && usermod -aG sudo itadmin`, перелогиньтесь |
 | `mount error(13): Permission denied` | Неверный логин/пароль шары или нет прав. Для доменной учётки задайте `SMB_DOMAIN`. Проверьте права на папку и шару (раздел 6.1) |
 | `mount error(95): Operation not supported` | Не та версия протокола. Попробуйте `SMB_VERS=2.1` или `2.0` в `.env` и снова `sudo ./deploy/setup-smb.sh` |
