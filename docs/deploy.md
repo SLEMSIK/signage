@@ -12,7 +12,7 @@
          └── /data/db            ← диск VM, SQLite (volume db)
 ```
 
-**Установка с нуля** — пошагово в [install-ubuntu.md](install-ubuntu.md). Здесь — как работает сервер, что делать при сбоях, обновления, бэкапы и отказоустойчивость.
+**Установка с нуля** — пошагово в [install-debian.md](install-debian.md) (Debian 13) или [install-ubuntu.md](install-ubuntu.md) (Ubuntu 24.04). Здесь — как работает сервер, что делать при сбоях, обновления, бэкапы и отказоустойчивость.
 
 ## 1. Когда SMB недоступен
 
@@ -41,8 +41,11 @@ curl -s http://localhost:8080/health    # status: ok | degraded
 ```bash
 cd /opt/signage
 git pull
-docker compose up -d --build
+docker compose build --pull   # --pull: заодно свежий базовый образ (Node 22, Debian 13, ffmpeg)
+docker compose up -d
 ```
+
+Раз в 1–2 месяца имеет смысл делать `docker compose build --pull && docker compose up -d` и без изменений кода: так в образ попадают исправления безопасности Node.js и Debian. Сам Docker и система обновляются через `sudo apt update && sudo apt full-upgrade`.
 
 Миграции БД применяются автоматически при старте. Перед обновлением полезно сделать бэкап: админка → «Настройки» → «Сделать бэкап сейчас».
 
@@ -78,7 +81,7 @@ docker compose start
 1. Делайте резервные копии VM средствами Proxmox (vzdump / Proxmox Backup Server) по расписанию.
 2. При отказе узла восстановите VM из копии на другом узле с тем же IP.
 3. Если копия VM старше последнего бэкапа БД, восстановите БД из `_backup` на SMB (раздел 3): так не потеряются изменения плейлистов и расписаний.
-4. Самый быстрый путь с нуля: новая VM по [install-ubuntu.md](install-ubuntu.md), затем восстановление БД из `_backup`. Медиатека уже на SMB, токены экранов хранятся в БД, плееры переподключатся сами.
+4. Самый быстрый путь с нуля: новая VM по [install-debian.md](install-debian.md) или [install-ubuntu.md](install-ubuntu.md), затем восстановление БД из `_backup`. Медиатека уже на SMB, токены экранов хранятся в БД, плееры переподключатся сами.
 
 ## 5. Безопасность
 

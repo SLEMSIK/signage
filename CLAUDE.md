@@ -287,7 +287,7 @@ volumes:
 5. `restart: unless-stopped`. Логи — в stdout в формате JSON (pino).
 6. Описать миграцию VM при отказе узла (Proxmox HA) и восстановление БД из бэкапа на SMB.
 
-Dockerfile: multi-stage на node:22-alpine (или bookworm-slim, если sharp/ffmpeg так проще), сборка admin и player, финальный образ без devDependencies, запуск не от root.
+Dockerfile: multi-stage на `node:22-trixie-slim` (Debian 13; образ задаётся `ARG NODE_IMAGE`), ffmpeg и tini из apt, сборка admin и player, финальный образ без devDependencies, запуск не от root. Инструкции установки: `docs/install-debian.md`, `docs/install-ubuntu.md`.
 
 ## Этапы разработки
 

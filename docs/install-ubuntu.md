@@ -468,8 +468,11 @@ docker compose restart                  # перезапуск (после пр�
 docker compose down                     # остановить
 docker compose up -d                    # запустить
 
-# обновление (из Git; при установке архивом — распакуйте новый архив поверх)
+# обновление кода (из Git; при установке архивом — распакуйте новый архив поверх)
 git pull && docker compose up -d --build
+
+# обновление Node и системных пакетов внутри образа (без изменения кода)
+docker compose build --pull && docker compose up -d
 
 # хэш пароля для config.yaml
 docker compose run --rm signage node packages/server/dist/cli/hash-password.js

@@ -16,7 +16,8 @@
 
 ## Документация
 
-- [docs/install-ubuntu.md](docs/install-ubuntu.md) — **установка на чистую Ubuntu** шаг за шагом: VM в Proxmox, Docker, SMB, пользователи, первый запуск, проверка.
+- [docs/install-debian.md](docs/install-debian.md) — **установка на чистый Debian 13** шаг за шагом: VM в Proxmox, Docker, SMB, пользователи, первый запуск, проверка.
+- [docs/install-ubuntu.md](docs/install-ubuntu.md) — то же для Ubuntu Server 24.04.
 - [docs/deploy.md](docs/deploy.md) — эксплуатация: работа без SMB, обновление, бэкапы и восстановление, отказ узла Proxmox, безопасность.
 - [kiosk/README.md](kiosk/README.md) — установка плеера на Windows.
 - [docs/widget-example/index.html](docs/widget-example/index.html) — пример HTML-виджета: часы, погода, курс ЦБ.
