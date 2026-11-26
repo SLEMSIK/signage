@@ -61,7 +61,7 @@
 | | SCSI Controller | VirtIO SCSI single |
 | Disks | Bus | SCSI, ✅ Discard, ✅ IO thread |
 | | Размер | **20 ГБ + объём медиатеки** (на диске хранится её копия для работы без SMB). Например, 20 + 50 = 70 ГБ |
-| CPU | Cores / Type | 2 / host |
+| CPU | Cores / **Type** | 2 / **host** — обязательно. Тип по умолчанию (`x86-64-v2-AES`) без инструкций AVX2, и сборка падает с «Illegal instruction» |
 | Memory | | 4096 МБ (минимум 2048 — сборка при установке требует памяти) |
 | Network | Bridge / Model | мост в локальную сеть (обычно `vmbr0`) / VirtIO |
 
@@ -242,6 +242,7 @@ signage update            # обновить код из Git, пересобра
 | SMB: `NT_STATUS_ACCESS_DENIED` | Нет прав на папку/шару у пользователя (раздел 4) |
 | В «Настройках» «Сетевой диск не смонтирован (видна метка .NOT-MOUNTED)» | `sudo mount /srv/signage-smb/share` и посмотрите ошибку; `journalctl -u signage-smb-remount -n 20` |
 | «Каталог … недоступен для записи» | Шара смонтирована, но у пользователя шары нет права записи |
+| Сборка: «Illegal instruction» | Тип процессора VM без AVX2. Proxmox: VM → Оборудование → Процессоры → Тип: **host**. Затем VM **выключить** (Shutdown/Stop, не Reboot), включить и снова запустить `bash install.sh`. Проверка: `grep -c avx2 /proc/cpuinfo` должно быть больше 0 |
 | `npm ci` не прошёл | Нет доступа к registry.npmjs.org; проверьте интернет и запустите скрипт снова |
 | `signage status` — статус `errored`, сервер перезапускается | `signage logs`: сервер пишет причину. Частое — ошибка в `/etc/signage/config.yaml` (сервер называет поле) |
 | «Неверный логин или пароль» | Хэш вставлен не целиком или без кавычек; после правки нужен `signage restart` |

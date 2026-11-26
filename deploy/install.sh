@@ -147,6 +147,20 @@ info "Код: $INSTALL_DIR · настройки: $ETC_DIR · данные: $DAT
 info "Журнал: $LOG_FILE"
 
 export DEBIAN_FRONTEND=noninteractive
+export NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_FUND=false
+
+# Процессор: сборщик интерфейса (Vite/rolldown) и обработка картинок используют
+# инструкции AVX/AVX2. В Proxmox по умолчанию тип процессора VM — урезанный
+# x86-64-v2-AES без них, и сборка падает с «Illegal instruction».
+CPU_HINT="В Proxmox: VM → Оборудование (Hardware) → Процессоры (Processors) → Тип (Type): host.
+     Затем ВЫКЛЮЧИТЕ VM (Shutdown/Stop, не Reboot), включите снова и запустите этот скрипт ещё раз."
+if [[ $ARCH == amd64 ]] && ! grep -qw avx2 /proc/cpuinfo; then
+  printf '\n%s⚠ Процессор виртуальной машины не поддерживает инструкции AVX2.%s\n' "$C_YELLOW" "$C_RESET"
+  info "Сборка Signage на таком процессоре падает с ошибкой «Illegal instruction»."
+  info "$CPU_HINT"
+  info "(Модель процессора сейчас: $(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo))"
+  ask_yn "Продолжить всё равно?" n || die "Остановлено: смените тип процессора VM и запустите скрипт снова"
+fi
 APT_OPTS=(-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 # -----------------------------------------------------------------------------
@@ -393,7 +407,17 @@ step "Сборка (5–10 минут при первом запуске)"
 info "Устанавливаю зависимости (npm ci)…"
 asuser npm ci --no-audit --no-fund --loglevel=error || die "npm ci не прошёл. Частая причина — нет доступа к registry.npmjs.org"
 info "Собираю сервер, админку и плеер…"
-asuser npm run build --silent || die "Сборка не удалась — см. сообщения выше"
+BUILD_LOG="$(mktemp)"
+if ! asuser npm run build --silent 2>&1 | tee "$BUILD_LOG"; then
+  if grep -qiE 'illegal instruction|SIGILL' "$BUILD_LOG"; then
+    rm -f "$BUILD_LOG"
+    die "Сборка упала с «Illegal instruction»: процессор VM не поддерживает нужные инструкции (AVX/AVX2).
+     $CPU_HINT"
+  fi
+  rm -f "$BUILD_LOG"
+  die "Сборка не удалась — см. сообщения выше"
+fi
+rm -f "$BUILD_LOG"
 install -m 0755 "$INSTALL_DIR/deploy/signage" /usr/local/bin/signage
 ok "Собрано. Установлена команда управления: signage"
 
