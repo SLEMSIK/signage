@@ -31,7 +31,7 @@ sudo bash install.sh
 
 | Что | Ubuntu |
 |---|---|
-| Статический IP | netplan: `/etc/netplan/*.yaml` (скрипт предложит закрепить адрес и запишет `/etc/netplan/99-signage-static.yaml`) |
+| Статический IP | netplan: `configure.sh` записывает `/etc/netplan/99-signage.yaml` и применяет его (`netplan apply`) |
 | DNS | через systemd-resolved; скрипт пишет `/etc/systemd/resolved.conf.d/signage-dns.conf`, если DNS не работает |
 | `sudo` | есть сразу |
 | Брандмауэр | ufw установлен, но выключен. Включить: `sudo ufw allow OpenSSH && sudo ufw allow 8080/tcp && sudo ufw enable` |
