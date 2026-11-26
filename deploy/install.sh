@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Signage — установка «под ключ» на чистый сервер
+#  Signage — установка «под ключ» на чистый сервер (Node.js + PM2, без Docker)
 #
 #  Поддерживается: Debian 12/13, Ubuntu 22.04/24.04 (amd64, arm64).
 #
@@ -9,10 +9,10 @@
 #
 #  Скрипт:
 #    1. проверяет сеть и чинит то, что можно (источники пакетов только с cdrom, DNS);
-#    2. ставит нужные пакеты, синхронизацию времени и Docker;
-#    3. берёт код Signage (из папки рядом со скриптом или из Git) в /opt/signage;
+#    2. ставит пакеты, синхронизацию времени, ffmpeg, Node.js 22 и PM2;
+#    3. берёт код Signage (из папки рядом со скриптом или из Git) в /opt/signage и собирает его;
 #    4. спрашивает адрес сервера, сетевой диск SMB, логины и пароли;
-#    5. монтирует SMB, собирает и запускает сервер, проверяет, что он работает.
+#    5. монтирует SMB, запускает сервер через PM2 (с автозапуском) и проверяет, что он работает.
 #
 #  Повторный запуск безопасен: уже установленное пропускается, настройки
 #  можно оставить прежними. Журнал установки: /var/log/signage-install.log
@@ -24,14 +24,21 @@ set -Eeuo pipefail
 
 REPO_URL_DEFAULT="https://github.com/SLEMSIK/signage.git"
 INSTALL_DIR="${SIGNAGE_DIR:-/opt/signage}"
+RUN_USER="${SIGNAGE_USER:-signage}"          # системный пользователь сервиса
+DATA_DIR="/var/lib/signage"                  # БД, копия медиатеки, ~/.pm2
+ETC_DIR="/etc/signage"
+CONFIG_FILE="$ETC_DIR/config.yaml"
+ENV_FILE="$ETC_DIR/signage.env"
+SMB_ROOT_DEFAULT="/srv/signage-smb"
+NODE_MAJOR=22
+NODE_MIN="22.12.0"
 LOG_FILE="/var/log/signage-install.log"
-CONTAINER_UID=1000   # пользователь node внутри контейнера
 ASSUME_YES=0
 
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "Неизвестный параметр: $arg (см. --help)" >&2; exit 1 ;;
   esac
 done
@@ -102,6 +109,10 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 
+# Команды от имени пользователя сервиса
+asuser() { sudo -u "$RUN_USER" -H "$@"; }
+pm2u()   { sudo -u "$RUN_USER" -H env PM2_HOME="$DATA_DIR/.pm2" pm2 "$@"; }
+
 # -----------------------------------------------------------------------------
 # 0. Предварительные проверки
 # -----------------------------------------------------------------------------
@@ -127,12 +138,12 @@ esac
 ARCH="$(dpkg --print-architecture)"
 case "$ARCH" in amd64|arm64) ;; *) die "Архитектура $ARCH не поддерживается (нужна amd64 или arm64)" ;; esac
 
-# Пользователь, который запустил sudo (ему дадим права на docker)
+# Пользователь, который запустил sudo (ему дадим права sudo, если их нет)
 REAL_USER="${SUDO_USER:-}"
 [[ $REAL_USER == root ]] && REAL_USER=""
 
 printf '%sSignage: установка на %s (%s)%s\n' "$C_BOLD" "${PRETTY_NAME}" "$ARCH" "$C_RESET"
-info "Каталог установки: $INSTALL_DIR"
+info "Код: $INSTALL_DIR · настройки: $ETC_DIR · данные: $DATA_DIR"
 info "Журнал: $LOG_FILE"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -149,7 +160,7 @@ fi
 
 has_network_source() {
   grep -rhsE '^[[:space:]]*(deb[[:space:]]|URIs:[[:space:]]).*https?://' \
-    /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | grep -qv 'download.docker.com'
+    /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | grep -qvE 'nodesource|download\.docker\.com'
 }
 
 if has_network_source; then
@@ -224,8 +235,8 @@ else
     ok "DNS исправлен: $REPLY"
   elif pings "$GW"; then
     die "Шлюз $GW доступен, но выхода в интернет нет.
-   Сервер должен иметь доступ в интернет для установки. Если в учреждении прокси — сообщите его адрес
-   администратору сервера; если выход закрыт — попросите сетевого администратора открыть его для $(primary_ip)."
+   Сервер должен иметь доступ в интернет для установки. Если в учреждении прокси или выход закрыт —
+   попросите сетевого администратора открыть доступ для $(primary_ip)."
   else
     die "Шлюз $GW не отвечает. Проверьте адрес/маску/шлюз и в Proxmox: VM → Оборудование → Сетевое устройство (мост, VLAN Tag)."
   fi
@@ -235,7 +246,8 @@ fi
 step "Системные пакеты"
 # -----------------------------------------------------------------------------
 apt-get update -q || die "apt update не прошёл — см. сообщения выше"
-PKGS=(ca-certificates curl git gnupg openssl sudo iproute2 cifs-utils smbclient tzdata)
+# python3/make/g++ — на случай, если для нативного модуля нет готовой сборки
+PKGS=(ca-certificates curl git gnupg openssl sudo iproute2 cifs-utils smbclient tzdata ffmpeg python3 make g++)
 if ! systemctl is-active --quiet chrony 2>/dev/null && ! systemctl is-active --quiet ntp 2>/dev/null; then
   PKGS+=(systemd-timesyncd)
 fi
@@ -271,29 +283,64 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-step "Docker"
+step "Node.js $NODE_MAJOR и PM2"
 # -----------------------------------------------------------------------------
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  ok "Docker уже установлен: $(docker --version | sed 's/,.*//'), $(docker compose version --short 2>/dev/null || true)"
+node_ok() {
+  local v
+  v="$(node -v 2>/dev/null | sed 's/^v//' || true)"
+  [[ -n $v ]] && [[ $(printf '%s\n%s\n' "$NODE_MIN" "$v" | sort -V | head -1) == "$NODE_MIN" ]] && [[ ${v%%.*} == "$NODE_MAJOR" ]]
+}
+if node_ok; then
+  ok "Node.js уже установлен: $(node -v)"
 else
-  # Пакеты Docker из репозитория ОС конфликтуют с официальными.
-  for p in docker.io docker-doc docker-compose podman-docker containerd runc; do
-    dpkg -s "$p" >/dev/null 2>&1 && apt-get remove -y -q "$p" || true
-  done
+  # Node.js из репозитория NodeSource: в Debian/Ubuntu штатная версия старее.
+  # Пакет npm из репозитория ОС конфликтует с nodejs от NodeSource (там npm уже внутри).
+  dpkg -s npm >/dev/null 2>&1 && apt-get remove -y -q npm || true
   install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL "https://download.docker.com/linux/$OS_ID/gpg" -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
-  echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$OS_ID $OS_CODENAME stable" \
-    > /etc/apt/sources.list.d/docker.list
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc
+  chmod a+r /etc/apt/keyrings/nodesource.asc
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
+  cat > /etc/apt/preferences.d/nodesource <<'EOF'
+# Signage: nodejs берём из NodeSource, а не из репозитория ОС
+Package: nodejs
+Pin: origin deb.nodesource.com
+Pin-Priority: 600
+EOF
   apt-get update -q
-  apt-get install "${APT_OPTS[@]}" docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  ok "Установлен $(docker --version | sed 's/,.*//')"
+  apt-get install "${APT_OPTS[@]}" nodejs
+  node_ok || die "Не удалось установить Node.js $NODE_MAJOR (установлено: $(node -v 2>/dev/null || echo нет))"
+  ok "Установлен Node.js $(node -v), npm $(npm -v)"
 fi
-systemctl enable --now docker >/dev/null
-if [[ -n $REAL_USER ]] && ! id -nG "$REAL_USER" | grep -qw docker; then
-  usermod -aG docker "$REAL_USER"
-  ok "Пользователь $REAL_USER добавлен в группу docker (вступит в силу после повторного входа)"
+
+if command -v pm2 >/dev/null 2>&1; then
+  ok "PM2 уже установлен: $(pm2 -v 2>/dev/null | tail -1)"
+else
+  npm install -g pm2@7 --no-audit --no-fund --loglevel=error
+  ok "Установлен PM2 $(pm2 -v 2>/dev/null | tail -1)"
 fi
+
+# Прежняя попытка установки через Docker могла занять порт.
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^signage'; then
+  warn "Запущен контейнер Signage от прежней установки через Docker — он займёт порт."
+  if ask_yn "Остановить и удалить контейнер?" y; then
+    docker ps -a --format '{{.Names}}' | grep -E '^signage' | xargs -r docker rm -f >/dev/null
+    ok "Контейнер остановлен"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+step "Пользователь сервиса"
+# -----------------------------------------------------------------------------
+if id "$RUN_USER" >/dev/null 2>&1; then
+  ok "Пользователь $RUN_USER уже есть"
+else
+  useradd --system --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin --comment "Signage server" "$RUN_USER"
+  ok "Создан системный пользователь $RUN_USER (без входа в систему)"
+fi
+install -d -m 0750 -o "$RUN_USER" -g "$RUN_USER" "$DATA_DIR" "$DATA_DIR/db" "$DATA_DIR/local-media"
+install -d -m 0750 -o root -g "$RUN_USER" "$ETC_DIR"
+ok "Данные: $DATA_DIR (БД, копия медиатеки)"
 
 # -----------------------------------------------------------------------------
 step "Код Signage"
@@ -303,7 +350,7 @@ if [[ -n ${BASH_SOURCE[0]-} && -f ${BASH_SOURCE[0]} ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 SRC_DIR=""
-if [[ -n $SCRIPT_DIR && -f $SCRIPT_DIR/../docker-compose.yml && -d $SCRIPT_DIR/../packages ]]; then
+if [[ -n $SCRIPT_DIR && -f $SCRIPT_DIR/../package.json && -d $SCRIPT_DIR/../packages/server ]]; then
   SRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
@@ -312,16 +359,15 @@ if [[ -n $SRC_DIR && $SRC_DIR == "$INSTALL_DIR" ]]; then
 elif [[ -n $SRC_DIR ]]; then
   info "Копирую код из $SRC_DIR в $INSTALL_DIR"
   mkdir -p "$INSTALL_DIR"
-  # Локальные настройки в каталоге установки не трогаем.
   tar -C "$SRC_DIR" --exclude=./node_modules --exclude='./packages/*/node_modules' --exclude='./packages/*/dist' \
       --exclude=./data --exclude=./.env --exclude=./config/config.yaml -cf - . | tar -C "$INSTALL_DIR" -xf -
   ok "Код скопирован в $INSTALL_DIR"
 elif [[ -d $INSTALL_DIR/.git ]]; then
   if ask_yn "Код уже есть в $INSTALL_DIR. Обновить из Git (git pull)?" y; then
-    git -C "$INSTALL_DIR" pull --ff-only || warn "git pull не удался — продолжаю с текущей версией кода"
+    git -c safe.directory="$INSTALL_DIR" -C "$INSTALL_DIR" pull --ff-only || warn "git pull не удался — продолжаю с текущей версией кода"
   fi
   ok "Код в $INSTALL_DIR"
-elif [[ -f $INSTALL_DIR/docker-compose.yml ]]; then
+elif [[ -f $INSTALL_DIR/package.json ]]; then
   ok "Код уже в $INSTALL_DIR"
 else
   ask "Адрес Git-репозитория" "${SIGNAGE_REPO:-$REPO_URL_DEFAULT}"
@@ -331,39 +377,54 @@ else
   if ! git clone "$REPO_URL" "$INSTALL_DIR" <"${TTY:-/dev/null}"; then
     die "Не удалось скачать код из $REPO_URL.
    Варианты: сделайте репозиторий доступным (логин + токен GitHub) или скопируйте проект на сервер
-   (на компьютере разработчика: git archive --format=tar.gz -o signage.tar.gz HEAD; scp signage.tar.gz user@сервер:/tmp/),
-   распакуйте: mkdir -p /tmp/signage && tar -xzf /tmp/signage.tar.gz -C /tmp/signage
-   и запустите: sudo bash /tmp/signage/deploy/install.sh"
+   (на компьютере разработчика: git archive --format=tar.gz -o signage.tar.gz HEAD; scp signage.tar.gz user@сервер:~),
+   распакуйте: mkdir -p ~/signage && tar -xzf ~/signage.tar.gz -C ~/signage
+   и запустите: sudo bash ~/signage/deploy/install.sh"
   fi
   ok "Код скачан"
 fi
-[[ -f $INSTALL_DIR/docker-compose.yml ]] || die "В $INSTALL_DIR нет docker-compose.yml — код скопирован не полностью"
-[[ -n $REAL_USER ]] && chown -R "$REAL_USER": "$INSTALL_DIR" 2>/dev/null || true
+[[ -f $INSTALL_DIR/package.json && -d $INSTALL_DIR/packages/server ]] || die "В $INSTALL_DIR нет кода Signage — он скопирован не полностью"
+chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+
+# -----------------------------------------------------------------------------
+step "Сборка (5–10 минут при первом запуске)"
+# -----------------------------------------------------------------------------
+info "Устанавливаю зависимости (npm ci)…"
+asuser npm ci --no-audit --no-fund --loglevel=error || die "npm ci не прошёл. Частая причина — нет доступа к registry.npmjs.org"
+info "Собираю сервер, админку и плеер…"
+asuser npm run build --silent || die "Сборка не удалась — см. сообщения выше"
+install -m 0755 "$INSTALL_DIR/deploy/signage" /usr/local/bin/signage
+ok "Собрано. Установлена команда управления: signage"
 
 # -----------------------------------------------------------------------------
 step "Настройки"
 # -----------------------------------------------------------------------------
-ENV_FILE="$INSTALL_DIR/.env"
-CONFIG_FILE="$INSTALL_DIR/config/config.yaml"
-
-# Docker создаёт папку на месте отсутствующего файла — исправляем последствия.
-[[ -d $CONFIG_FILE ]] && rmdir "$CONFIG_FILE" 2>/dev/null || true
+# Значения от прежней установки через Docker — как подсказки по умолчанию.
+OLD_ENV="$INSTALL_DIR/.env"
+env_get() {
+  local f v
+  for f in "$ENV_FILE" "$OLD_ENV"; do
+    v="$({ grep -E "^$1=" "$f" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E "s/^'(.*)'$/\1/"; } || true)"
+    [[ -n $v ]] && { printf '%s' "$v"; return 0; }
+  done
+  return 0
+}
+config_port() { { awk '/^server:/{s=1;next} /^[^[:space:]#]/{s=0} s&&/^[[:space:]]+port:/{gsub(/[^0-9]/,"",$2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null; } || true; }
 
 RECONFIGURE=1
 if [[ -f $ENV_FILE && -f $CONFIG_FILE ]]; then
-  if ask_yn "Настройки уже есть. Оставить их без изменений?" y; then RECONFIGURE=0; fi
+  if ask_yn "Настройки уже есть ($ETC_DIR). Оставить их без изменений?" y; then RECONFIGURE=0; fi
 fi
-
-env_get() { { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E "s/^'(.*)'$/\1/"; } || true; }
 
 SMB_ENABLED=0
 if [[ $RECONFIGURE -eq 1 ]]; then
   echo
   info "${C_BOLD}Адрес сервера${C_RESET} — по нему экраны и сотрудники будут открывать Signage."
   ask "IP-адрес сервера" "${SIGNAGE_IP:-$(primary_ip)}"; SERVER_IP="$REPLY"
-  ask "Порт" "${SIGNAGE_PORT:-8080}"; PORT="$REPLY"
-  [[ $PORT =~ ^[0-9]+$ ]] || die "Порт должен быть числом"
+  CUR_PORT="$(config_port)"
+  ask "Порт" "${SIGNAGE_PORT:-${CUR_PORT:-8080}}"; PORT="${REPLY:-8080}"
+  [[ $PORT =~ ^[0-9]+$ && $PORT -ge 1024 && $PORT -le 65535 ]] || die "Порт — число от 1024 до 65535 (сервер работает не от root)"
   PUBLIC_URL="http://$SERVER_IP:$PORT"
 
   echo
@@ -383,7 +444,7 @@ if [[ $RECONFIGURE -eq 1 ]]; then
       ask "Имя шары" "${SIGNAGE_SMB_SHARE:-$(env_get SMB_SHARE)}"; SMB_SHARE="$REPLY"
       ask "Пользователь шары" "${SIGNAGE_SMB_USER:-$(env_get SMB_USER)}"; SMB_USER="$REPLY"
       ask_secret "Пароль шары" SIGNAGE_SMB_PASSWORD 1 0; SMB_PASSWORD="$REPLY"
-      ask "Домен (пусто, если учётная запись не доменная)" "${SIGNAGE_SMB_DOMAIN-}"; SMB_DOMAIN="$REPLY"
+      ask "Домен (пусто, если учётная запись не доменная)" "${SIGNAGE_SMB_DOMAIN-$(env_get SMB_DOMAIN)}"; SMB_DOMAIN="$REPLY"
       [[ -n $SMB_HOST && -n $SMB_SHARE && -n $SMB_USER ]] || { warn "Адрес, шара и пользователь обязательны"; continue; }
       if [[ $SMB_PASSWORD == *"'"* ]]; then warn "Пароль шары не должен содержать апостроф ('). Смените пароль на файловом сервере или введите другой."; continue; fi
 
@@ -429,11 +490,10 @@ if [[ $RECONFIGURE -eq 1 ]]; then
     USERS+=("$OP_LOGIN|operator|$REPLY")
   fi
 
-  # ---- .env ----
+  # ---- signage.env (параметры SMB) ----
   q() { printf "'%s'" "$1"; }   # значения в одинарных кавычках: $ и пробелы не раскрываются
   {
-    echo "# Записано установщиком Signage $(date '+%F %T')"
-    echo "PORT=$PORT"
+    echo "# Записано установщиком Signage $(date '+%F %T'). После правки: signage smb"
     if [[ $SMB_ENABLED -eq 1 ]]; then
       echo "SMB_HOST=$(q "$SMB_HOST")"
       echo "SMB_SHARE=$(q "$SMB_SHARE")"
@@ -444,42 +504,15 @@ if [[ $RECONFIGURE -eq 1 ]]; then
     else
       echo "# SMB не подключён. Чтобы подключить — запустите deploy/install.sh снова."
     fi
-    echo "SMB_ROOT=/srv/signage-smb"
+    echo "SMB_ROOT=$SMB_ROOT_DEFAULT"
+    echo "SIGNAGE_USER=$RUN_USER"
   } > "$ENV_FILE"
+  chown root:root "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  # docker compose читает .env от имени того, кто его запускает
-  [[ -n $REAL_USER ]] && chown "$REAL_USER": "$ENV_FILE"
   ok "Записан $ENV_FILE"
-else
-  PORT="$(env_get PORT)"; PORT="${PORT:-8080}"
-  [[ -n $(env_get SMB_HOST) ]] && SMB_ENABLED=1
-  ok "Оставлены прежние настройки"
-fi
 
-# -----------------------------------------------------------------------------
-step "Сетевой диск"
-# -----------------------------------------------------------------------------
-SMB_MOUNT=/srv/signage-smb/share
-if [[ $SMB_ENABLED -eq 1 ]]; then
-  bash "$INSTALL_DIR/deploy/setup-smb.sh" || warn "setup-smb.sh завершился с ошибкой — Signage будет работать с диска сервера"
-  if mountpoint -q "$SMB_MOUNT"; then ok "SMB смонтирован в $SMB_MOUNT"; else warn "SMB не смонтирован — таймер будет пробовать раз в минуту"; fi
-else
-  # Без SMB: пустая точка монтирования с меткой — сервер работает с диска VM.
-  mkdir -p "$SMB_MOUNT"
-  mountpoint -q "$SMB_MOUNT" || touch "$SMB_MOUNT/.NOT-MOUNTED"
-  info "SMB не подключён: медиатека хранится на диске сервера"
-fi
-
-# -----------------------------------------------------------------------------
-step "Сборка образа (5–15 минут при первом запуске)"
-# -----------------------------------------------------------------------------
-docker compose build --pull || die "Сборка образа не удалась. Частая причина — нет доступа к registry.npmjs.org или docker.io"
-ok "Образ собран"
-
-# -----------------------------------------------------------------------------
-if [[ $RECONFIGURE -eq 1 ]]; then
-  step "Конфиг сервера"
-  hash_pw() { printf '%s' "$1" | docker run --rm -i --entrypoint node signage:latest packages/server/dist/cli/hash-password.js; }
+  # ---- config.yaml ----
+  hash_pw() { printf '%s' "$1" | node "$INSTALL_DIR/packages/server/dist/cli/hash-password.js"; }
   yq() { local s="${1//\\/\\\\}"; printf '"%s"' "${s//\"/\\\"}"; }   # строка в двойных кавычках YAML
 
   NET_YAML=""
@@ -498,14 +531,15 @@ if [[ $RECONFIGURE -eq 1 ]]; then
     ok "Пользователь $login ($role)"
   done
 
-  mkdir -p "$(dirname "$CONFIG_FILE")"
+  SMB_MOUNT_PATH="$SMB_ROOT_DEFAULT/share"
   cat > "$CONFIG_FILE" <<EOF
 # Конфигурация Signage. Записано установщиком $(date '+%F %T').
-# После правки: cd $INSTALL_DIR && docker compose restart
-# Пароль пользователя: docker compose run --rm signage node packages/server/dist/cli/hash-password.js
+# Правка: signage config (откроет редактор и перезапустит сервер)
+# Хэш пароля пользователя: signage hash-password
 
 server:
-  port: 8080                        # порт внутри контейнера; внешний — PORT в .env
+  port: $PORT
+  host: "0.0.0.0"
   publicUrl: $(yq "$PUBLIC_URL")
   timezone: $(yq "$TIMEZONE")
   sessionSecret: $(yq "$(openssl rand -hex 32)")
@@ -515,12 +549,12 @@ server:
 users:
 ${USERS_YAML}
 storage:
-  mediaPath: /data/smb/share
-  dbPath: /data/db/signage.sqlite
-  backupPath: /data/smb/share/_backup
+  mediaPath: $SMB_MOUNT_PATH
+  dbPath: $DATA_DIR/db/signage.sqlite
+  backupPath: $SMB_MOUNT_PATH/_backup
   backupTime: "03:30"
   backupKeep: 14
-  localFallbackPath: /data/local-media
+  localFallbackPath: $DATA_DIR/local-media
   localMirror: true
   localMinFreeMb: 2048
   maxUploadMb: 500
@@ -538,36 +572,76 @@ player:
   defaultImageDurationSec: 10
   defaultHtmlDurationSec: 30
 EOF
-  # Читать конфиг должен пользователь node (uid 1000) внутри контейнера; остальным — нет.
-  chown "root:$CONTAINER_UID" "$CONFIG_FILE"
+  # Читает сервис (группа signage), меняет только root.
+  chown "root:$RUN_USER" "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE"
   ok "Записан $CONFIG_FILE"
+else
+  PORT="$(config_port)"; PORT="${PORT:-8080}"
+  [[ -n $(env_get SMB_HOST) ]] && SMB_ENABLED=1
+  ok "Оставлены прежние настройки"
 fi
 
 # -----------------------------------------------------------------------------
-step "Запуск"
+step "Сетевой диск"
 # -----------------------------------------------------------------------------
-docker compose up -d --remove-orphans
+SMB_MOUNT="$SMB_ROOT_DEFAULT/share"
+if [[ $SMB_ENABLED -eq 1 ]]; then
+  SIGNAGE_ENV="$ENV_FILE" bash "$INSTALL_DIR/deploy/setup-smb.sh" || warn "setup-smb.sh завершился с ошибкой — Signage будет работать с диска сервера"
+  if mountpoint -q "$SMB_MOUNT"; then ok "SMB смонтирован в $SMB_MOUNT"; else warn "SMB не смонтирован — таймер будет пробовать раз в минуту"; fi
+else
+  # Без SMB: пустая точка монтирования с меткой — сервер работает с диска VM.
+  mkdir -p "$SMB_MOUNT"
+  mountpoint -q "$SMB_MOUNT" || touch "$SMB_MOUNT/.NOT-MOUNTED"
+  info "SMB не подключён: медиатека хранится на диске сервера ($DATA_DIR/local-media)"
+fi
+
+# -----------------------------------------------------------------------------
+step "Запуск через PM2"
+# -----------------------------------------------------------------------------
+# Автозапуск после перезагрузки: systemd-служба pm2-<пользователь>
+if ! systemctl is-enabled --quiet "pm2-$RUN_USER" 2>/dev/null; then
+  env PATH="$PATH" pm2 startup systemd -u "$RUN_USER" --hp "$DATA_DIR" >/dev/null
+  ok "Автозапуск: служба pm2-$RUN_USER"
+fi
+pm2u startOrRestart "$INSTALL_DIR/deploy/ecosystem.config.cjs" --update-env >/dev/null
+pm2u save >/dev/null
+ok "Процесс signage запущен"
+
+# Ротация журналов PM2, чтобы они не съели диск
+if ! pm2u jlist 2>/dev/null | grep -q '"name":"pm2-logrotate"'; then
+  if pm2u install pm2-logrotate >/dev/null 2>&1; then
+    pm2u set pm2-logrotate:max_size 20M >/dev/null
+    pm2u set pm2-logrotate:retain 10 >/dev/null
+    pm2u set pm2-logrotate:compress true >/dev/null
+    pm2u save >/dev/null
+    ok "Ротация журналов: pm2-logrotate (20 МБ × 10 файлов)"
+  else
+    warn "Не удалось поставить pm2-logrotate — журналы будут расти; поставьте позже: sudo -u $RUN_USER -H env PM2_HOME=$DATA_DIR/.pm2 pm2 install pm2-logrotate"
+  fi
+fi
+
 info "Жду, пока сервер ответит…"
 HEALTH=""
-for _ in $(seq 1 60); do
-  HEALTH="$(curl -fsS "http://127.0.0.1:$PORT/health" 2>/dev/null || true)"
-  [[ -n $HEALTH ]] && break
-  # 503 тоже ответ: сервер жив, но, например, нет ни SMB, ни места на диске
-  if curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q 503; then
-    HEALTH="$(curl -s "http://127.0.0.1:$PORT/health")"; break
-  fi
+for _ in $(seq 1 40); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" 2>/dev/null || true)"
+  if [[ $code == 200 || $code == 503 ]]; then HEALTH="$(curl -s "http://127.0.0.1:$PORT/health" || true)"; break; fi
   sleep 3
 done
 if [[ -z $HEALTH ]]; then
-  docker compose logs --tail=40 || true
-  die "Сервер не ответил за 3 минуты — смотрите логи выше (docker compose logs)"
+  pm2u logs signage --lines 40 --nostream || true
+  die "Сервер не ответил за 2 минуты — смотрите журнал выше (signage logs)"
 fi
 case "$HEALTH" in
   *'"status":"ok"'*) ok "Сервер работает" ;;
   *'"status":"degraded"'*) ok "Сервер работает (сетевой диск недоступен — используется диск сервера)" ;;
   *) warn "Сервер отвечает, но с проблемой: $HEALTH" ;;
 esac
+
+# Брандмауэр: если ufw включён — открываем порт Signage
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw allow "$PORT/tcp" >/dev/null && ok "ufw: открыт порт $PORT/tcp"
+fi
 
 # -----------------------------------------------------------------------------
 step "Статический IP"
@@ -636,12 +710,12 @@ cat <<EOF
         powershell -ExecutionPolicy Bypass -File .\\install.ps1 -ServerUrl $URL -KioskUser signage
       Подробно: $INSTALL_DIR/kiosk/README.md
 
-  Управление (в $INSTALL_DIR):
-    docker compose ps | logs -f | restart
-    sudo bash deploy/install.sh     — изменить настройки или обновить
+  Управление сервером:
+    signage status | health | logs | restart
+    signage config          — изменить настройки (/etc/signage/config.yaml)
+    signage hash-password   — хэш пароля для нового пользователя
+    signage update          — обновить из Git и перезапустить
+    sudo bash $INSTALL_DIR/deploy/install.sh — перенастроить (адрес, SMB, пароли)
 
   Журнал установки: $LOG_FILE
 EOF
-if [[ -n $REAL_USER ]]; then
-  printf '\n  %s: выйдите и войдите снова, чтобы команды docker работали без sudo.\n' "$REAL_USER"
-fi

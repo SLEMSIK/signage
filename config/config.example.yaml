@@ -1,5 +1,5 @@
 # Конфигурация сервера Signage.
-# Скопируйте в config/config.yaml и заполните. Файл монтируется в контейнер read-only.
+# На сервере: /etc/signage/config.yaml (его пишет deploy/install.sh). При разработке: config/config.yaml.
 
 server:
   port: 8080
@@ -11,7 +11,7 @@ server:
   trustProxy: false                      # true, если перед сервером reverse proxy
 
 users:
-  # Хэш пароля: npm run hash-password (или см. docs/deploy.md для Docker)
+  # Хэш пароля: на сервере — signage hash-password, при разработке — npm run hash-password
   - login: admin
     role: admin
     passwordHash: "$2b$10$REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_M"
@@ -20,15 +20,15 @@ users:
     passwordHash: "$2b$10$REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_ME_REPLACE_M"
 
 storage:
-  mediaPath: /data/smb/share      # SMB внутри контейнера (на хосте — $SMB_ROOT/share, см. deploy/setup-smb.sh)
-  dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
-  backupPath: /data/smb/share/_backup # куда класть ежедневный бэкап БД
+  mediaPath: /srv/signage-smb/share   # сетевой диск SMB (монтирует deploy/setup-smb.sh)
+  dbPath: /var/lib/signage/db/signage.sqlite # ЛОКАЛЬНЫЙ диск, не SMB
+  backupPath: /srv/signage-smb/share/_backup # куда класть ежедневный бэкап БД
   # Диск VM. Приоритет у SMB; если он недоступен, сервер работает отсюда:
   #  - новые загрузки сохраняются сюда и потом сами переносятся на SMB;
   #  - при localMirror: true здесь же лежит копия всей медиатеки, и плееры
   #    получают файлы, даже если SMB недоступен (в т.ч. при загрузке VM).
   # null — отключить (тогда без SMB загрузка блокируется, файлы не отдаются).
-  localFallbackPath: /data/local-media
+  localFallbackPath: /var/lib/signage/local-media
   localMirror: true
   localMinFreeMb: 2048            # не писать на диск VM, если свободно меньше
   backupTime: "03:30"             # время ежедневного бэкапа (server.timezone)

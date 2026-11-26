@@ -2,7 +2,7 @@
 
 ## Цель
 
-Система digital signage для локальной сети учреждения. Есть сервер (Docker-контейнер на Node.js в VM Ubuntu на Proxmox) и плееры на экранах (Windows OPS + браузер в kiosk-режиме). Через веб-админку можно загружать контент, собирать плейлисты, назначать их на экраны и группы, переключать контент вручную и задавать расписание по дням недели и времени.
+Система digital signage для локальной сети учреждения. Есть сервер (Node.js под PM2 в VM Debian/Ubuntu на Proxmox) и плееры на экранах (Windows OPS + браузер в kiosk-режиме). Через веб-админку можно загружать контент, собирать плейлисты, назначать их на экраны и группы, переключать контент вручную и задавать расписание по дням недели и времени.
 
 Экраны на старте: 2 ТВ в холле и 1 экран на 3 этаже. Система должна легко расширяться до N экранов.
 
@@ -41,9 +41,6 @@
 ```
 /
 ├── CLAUDE.md
-├── docker-compose.yml
-├── Dockerfile
-├── .env.example              # SMB и порт — переменные для compose
 ├── config/config.example.yaml
 ├── packages/
 │   ├── server/               # Fastify API, WS, планировщик, прокси
@@ -60,17 +57,23 @@
 │   ├── admin/                # React-админка
 │   ├── player/               # страница плеера + service worker
 │   └── shared/               # общие типы и протокол WS (zod-схемы)
+├── deploy/                   # установка на сервер
+│   ├── install.sh            # установка «под ключ» (Node 22, PM2, SMB, настройки)
+│   ├── setup-smb.sh          # монтирование SMB на хосте
+│   ├── ecosystem.config.cjs  # PM2
+│   ├── signage               # команда управления (/usr/local/bin/signage)
+│   └── signage.env.example   # параметры SMB (/etc/signage/signage.env)
 ├── kiosk/                    # скрипты для Windows OPS
 │   ├── install.ps1
 │   ├── uninstall.ps1
 │   ├── watchdog.ps1
 │   └── README.md
-└── docs/deploy.md            # установка VM, Docker, SMB
+└── docs/                     # install-debian.md, install-ubuntu.md, deploy.md (эксплуатация)
 ```
 
 ## Конфигурация
 
-`config/config.yaml` монтируется в контейнер read-only:
+На сервере конфиг — `/etc/signage/config.yaml` (root:signage, 640; путь передаётся в `CONFIG_PATH`). При разработке — `config/config.yaml`:
 
 ```yaml
 server:
@@ -89,9 +92,10 @@ users:
     passwordHash: "$2b$10$..."
 
 storage:
-  mediaPath: /data/smb/share      # SMB внутри контейнера (монтирует хост)
-  dbPath: /data/db/signage.sqlite # ЛОКАЛЬНЫЙ volume, не SMB
-  backupPath: /data/smb/share/_backup # куда класть ежедневный бэкап БД
+  mediaPath: /srv/signage-smb/share          # SMB (монтирует deploy/setup-smb.sh)
+  dbPath: /var/lib/signage/db/signage.sqlite # ЛОКАЛЬНЫЙ диск, не SMB
+  backupPath: /srv/signage-smb/share/_backup # куда класть ежедневный бэкап БД
+  localFallbackPath: /var/lib/signage/local-media  # диск VM: резерв и копия медиатеки
   maxUploadMb: 500
 
 proxy:
@@ -107,26 +111,15 @@ player:
   defaultHtmlDurationSec: 30
 ```
 
-SMB монтируется **на хосте** скриптом `deploy/setup-smb.sh` (fstab с `nofail` + таймер `signage-smb-remount` раз в минуту), а в контейнер пробрасывается родительский каталог с `propagation: rslave`. Так контейнер стартует и без SMB, а шара, смонтированная позже, появляется в нём без перезапуска. Параметры SMB лежат в `.env`; смена адреса — правка `.env` и повторный запуск скрипта:
-
-```yaml
-# docker-compose.yml (фрагмент)
-volumes:
-  - type: bind
-    source: ${SMB_ROOT:-/srv/signage-smb}   # шара смонтирована в $SMB_ROOT/share
-    target: /data/smb                       # storage.mediaPath: /data/smb/share
-    bind: { propagation: rslave }
-  - local_media:/data/local-media           # диск VM: резерв и копия медиатеки
-  - db:/data/db
-```
+SMB монтирует система скриптом `deploy/setup-smb.sh`: fstab с `nofail` (сервер загружается и без SMB) и таймер `signage-smb-remount`, который раз в минуту монтирует шару заново, если она отвалилась. Права на файлы шары — у пользователя сервиса `signage`. Параметры SMB (адрес, шара, логин, пароль) лежат в `/etc/signage/signage.env` (root, 600); смена адреса — правка файла и `signage smb`.
 
 В пустом каталоге точки монтирования лежит метка `.NOT-MOUNTED`. Если сервер её видит, значит SMB не смонтирован.
 
-**Важно:** SQLite нельзя держать на SMB, там ломаются блокировки. БД хранится на локальном volume `db`. Раз в сутки и при старте делается бэкап (`VACUUM INTO`) в `storage.backupPath` на SMB. Ротация — 14 копий.
+**Важно:** SQLite нельзя держать на SMB, там ломаются блокировки. БД хранится на локальном диске (`/var/lib/signage/db`). Раз в сутки и при старте делается бэкап (`VACUUM INTO`) в `storage.backupPath` на SMB. Ротация — 14 копий.
 
 Если SMB недоступен, сервер не падает, плееры продолжают играть из своего кэша.
 
-**Работа с диска VM (приоритет — SMB).** При `storage.localMirror: true` сервер держит на диске VM копию всей медиатеки (`media.mirrored`) и, пока SMB недоступен, отдаёт файлы из неё. Пока SMB недоступен, новые загрузки сохраняются в `storage.localFallbackPath` (Docker-volume `local_media` на диске VM). У медиафайла в БД есть поле `location` (`primary` — SMB, `local` — диск VM); относительный путь одинаков в обоих местах, поэтому URL не меняются. После каждой успешной проверки SMB (раз в 30 с и в `/health`) сервер переносит локальные файлы на SMB: копия во временный путь → проверка (sha256 для файла, состав и размеры для zip-пакета) → rename → `location = primary` → удаление локальной копии. Если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка отклоняется. В админке при этом жёлтый баннер «Сетевое хранилище недоступно — файлы сохраняются на диск сервера (ждут переноса: N)». Если `localFallbackPath: null`, резерв выключен и загрузка при недоступном SMB блокируется (красный баннер).
+**Работа с диска VM (приоритет — SMB).** При `storage.localMirror: true` сервер держит на диске VM копию всей медиатеки (`media.mirrored`) и, пока SMB недоступен, отдаёт файлы из неё. Пока SMB недоступен, новые загрузки сохраняются в `storage.localFallbackPath` (`/var/lib/signage/local-media` на диске VM). У медиафайла в БД есть поле `location` (`primary` — SMB, `local` — диск VM); относительный путь одинаков в обоих местах, поэтому URL не меняются. После каждой успешной проверки SMB (раз в 30 с и в `/health`) сервер переносит локальные файлы на SMB: копия во временный путь → проверка (sha256 для файла, состав и размеры для zip-пакета) → rename → `location = primary` → удаление локальной копии. Если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка отклоняется. В админке при этом жёлтый баннер «Сетевое хранилище недоступно — файлы сохраняются на диск сервера (ждут переноса: N)». Если `localFallbackPath: null`, резерв выключен и загрузка при недоступном SMB блокируется (красный баннер).
 
 ## Роли
 
@@ -166,7 +159,7 @@ volumes:
 
 `validUntil` — ближайший момент, когда результат может измениться (граница любого расписания или истечение override). Сервер держит таймер на ближайший `validUntil` по всем экранам и при срабатывании пересчитывает и пушит изменения. Плюс страховочный пересчёт раз в минуту и при любом изменении данных.
 
-Учитывать `server.timezone`, а не таймзону контейнера. Тесты: пересечения, переход через полночь, переход между днями недели, override с истечением, приоритеты, группа против экрана.
+Учитывать `server.timezone`, а не таймзону системы. Тесты: пересечения, переход через полночь, переход между днями недели, override с истечением, приоритеты, группа против экрана.
 
 ## Синхронный показ в группе
 
@@ -276,24 +269,23 @@ volumes:
 - Rate limit на логин, блокировка на 5 минут после 10 неудачных попыток.
 - Токен плеера даёт доступ только к `/player`, `/ws/player`, `/media`, `/content`, `/api/proxy` и не открывает админ-API.
 - HTML-контент отдаётся с отдельного пути и не получает cookie админки (cookie с `path=/admin` и `/api/admin`).
-- Без секретов в образе: всё передаётся через config и `.env`.
+- Без секретов в репозитории: всё в `/etc/signage/config.yaml` и `/etc/signage/signage.env` на сервере.
 
-## Деплой (`docs/deploy.md`)
+## Деплой
 
-1. Proxmox → VM Ubuntu Server 24.04, 2 vCPU, 2–4 GB RAM, 20 GB диск.
-2. Установить Docker Engine + compose plugin и `cifs-utils`.
-3. Склонировать репозиторий, заполнить `.env` (SMB_HOST, SMB_SHARE, SMB_USER, SMB_PASSWORD) и `config/config.yaml`.
-4. `docker compose up -d`. Healthcheck: `GET /health` (проверяет БД и доступность mediaPath).
-5. `restart: unless-stopped`. Логи — в stdout в формате JSON (pino).
-6. Описать миграцию VM при отказе узла (Proxmox HA) и восстановление БД из бэкапа на SMB.
+Без Docker: Node.js 22 (NodeSource) + PM2 на Debian 12/13 или Ubuntu 22.04/24.04.
 
-Dockerfile: multi-stage на `node:22-trixie-slim` (Debian 13; образ задаётся `ARG NODE_IMAGE`), ffmpeg и tini из apt, сборка admin и player, финальный образ без devDependencies, запуск не от root. Установка «под ключ»: `deploy/install.sh` (Debian/Ubuntu: пакеты, Docker, код в /opt/signage, вопросы о сети, SMB и пользователях, запуск). Ручные инструкции: `docs/install-debian.md`, `docs/install-ubuntu.md`.
+1. Proxmox → VM Debian 13, 2 vCPU, 2–4 GB RAM, диск 20 GB + объём медиатеки.
+2. `sudo bash deploy/install.sh` — ставит пакеты, ffmpeg, Node.js 22, PM2; создаёт системного пользователя `signage`; кладёт код в `/opt/signage` и собирает (`npm ci && npm run build`); спрашивает адрес, сети, SMB, пользователей; пишет `/etc/signage/config.yaml` и `signage.env`; монтирует SMB; запускает через PM2 (`deploy/ecosystem.config.cjs`, один процесс в режиме fork) с автозапуском (`pm2 startup` → служба `pm2-signage`) и ротацией журналов (pm2-logrotate).
+3. Управление — команда `signage` (`status`, `health`, `logs`, `restart`, `config`, `update`, `hash-password`, `smb`).
+4. Healthcheck: `GET /health` (БД и доступность mediaPath). Логи — JSON (pino) в журналах PM2.
+5. Инструкции: `docs/install-debian.md`, `docs/install-ubuntu.md`; эксплуатация, бэкапы и Proxmox HA — `docs/deploy.md`.
 
 ## Этапы разработки
 
 Делать по порядку. После каждого этапа — рабочее состояние и коммит.
 
-1. **Каркас:** монорепо, TypeScript, Fastify, загрузка конфига (zod), SQLite + миграции, `/health`, Dockerfile и compose с SMB-volume.
+1. **Каркас:** монорепо, TypeScript, Fastify, загрузка конфига (zod), SQLite + миграции, `/health`, скрипты развёртывания.
 2. **Авторизация:** логин по пользователям из конфига, роли, сессии, фильтр сетей, CLI `hash-password`, каркас админки (логин и пустые разделы).
 3. **Медиатека:** загрузка, zip с проверками, превью, раздача `/media` и `/content` с ETag.
 4. **Экраны:** WS-хаб, pairing по коду, токены, статусы и heartbeat, дашборд онлайн/офлайн.

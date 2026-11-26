@@ -40,14 +40,14 @@ export const configSchema = z.object({
     .min(1)
     .refine((u) => new Set(u.map((x) => x.login)).size === u.length, 'Логины пользователей должны быть уникальны'),
   storage: z.object({
-    mediaPath: z.string().default('/data/smb/share'),
-    dbPath: z.string().default('/data/db/signage.sqlite'),
-    backupPath: z.string().default('/data/smb/share/_backup'),
+    mediaPath: z.string().default('/srv/signage-smb/share'),
+    dbPath: z.string().default('/var/lib/signage/db/signage.sqlite'),
+    backupPath: z.string().default('/srv/signage-smb/share/_backup'),
     /**
      * Резервный каталог на диске VM: сюда сохраняются загрузки, пока SMB недоступен,
      * потом файлы автоматически переносятся на SMB. null — резерв выключен.
      */
-    localFallbackPath: z.string().nullable().default('/data/local-media'),
+    localFallbackPath: z.string().nullable().default('/var/lib/signage/local-media'),
     /** Не принимать загрузки на диск VM, если свободного места меньше. */
     localMinFreeMb: z.number().nonnegative().default(2048),
     /**

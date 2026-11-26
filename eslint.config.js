@@ -13,6 +13,15 @@ export default tseslint.config(
     },
   },
   {
+    // Конфиг PM2 — CommonJS для Node.js
+    files: ['**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { require: 'readonly', module: 'writable', __dirname: 'readonly', process: 'readonly' },
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
     files: ['packages/admin/**/*.{ts,tsx}', 'packages/player/**/*.ts'],
     languageOptions: { globals: { window: 'readonly', document: 'readonly', navigator: 'readonly', localStorage: 'readonly', location: 'readonly' } },
   },

@@ -22,11 +22,11 @@
 sudo bash deploy/install.sh
 ```
 
-Скрипт поставит Docker и всё необходимое, спросит адрес, сетевой диск и пароли и запустит сервер. Как доставить код на сервер — в начале [docs/install-debian.md](docs/install-debian.md).
+Скрипт поставит Node.js 22, PM2 и всё необходимое, соберёт проект, спросит адрес, сетевой диск и пароли и запустит сервер через PM2 (с автозапуском). Как доставить код на сервер — в начале [docs/install-debian.md](docs/install-debian.md).
 
 ## Документация
 
-- [docs/install-debian.md](docs/install-debian.md) — **установка на чистый Debian 13** шаг за шагом: VM в Proxmox, Docker, SMB, пользователи, первый запуск, проверка.
+- [docs/install-debian.md](docs/install-debian.md) — **установка на чистый Debian 13** шаг за шагом: VM в Proxmox, установка скриптом, SMB, пользователи, проверка, управление.
 - [docs/install-ubuntu.md](docs/install-ubuntu.md) — то же для Ubuntu Server 24.04.
 - [docs/deploy.md](docs/deploy.md) — эксплуатация: работа без SMB, обновление, бэкапы и восстановление, отказ узла Proxmox, безопасность.
 - [kiosk/README.md](kiosk/README.md) — установка плеера на Windows.
@@ -37,13 +37,13 @@ sudo bash deploy/install.sh
 Пользователи задаются только в `config/config.yaml`, раздел `users` (логин, роль `admin` или `operator`, bcrypt-хэш пароля). Хэш выдаёт команда:
 
 ```bash
-# на сервере (Docker)
-docker compose run --rm signage node packages/server/dist/cli/hash-password.js
+# на сервере
+signage hash-password
 # при разработке
 npm run hash-password
 ```
 
-После правки конфига перезапустите сервер. При смене пароля старые сессии этого пользователя сразу перестают действовать.
+На сервере конфиг — `/etc/signage/config.yaml`; править командой `signage config` (сервер перезапустится сам). При смене пароля старые сессии этого пользователя сразу перестают действовать.
 
 ## Разработка
 

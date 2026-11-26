@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Управление сервером Signage (устанавливается в /usr/local/bin/signage).
+#
+#   signage status            — состояние процесса
+#   signage health            — ответ /health (БД, сетевой диск)
+#   signage logs [N]          — последние N строк журнала и далее в реальном времени (Ctrl+C — выход)
+#   signage restart           — перезапуск (после правки /etc/signage/config.yaml)
+#   signage stop | start      — остановить / запустить
+#   signage update            — обновить код из Git, пересобрать и перезапустить
+#   signage hash-password     — bcrypt-хэш пароля для config.yaml
+#   signage config            — открыть конфиг в редакторе, затем перезапустить
+#   signage smb               — перемонтировать сетевой диск (после правки /etc/signage/signage.env)
+set -euo pipefail
+
+APP_DIR="${SIGNAGE_DIR:-/opt/signage}"
+RUN_USER="${SIGNAGE_USER:-signage}"
+CONFIG="${SIGNAGE_CONFIG:-/etc/signage/config.yaml}"
+RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6 || true)"
+RUN_HOME="${RUN_HOME:-/var/lib/signage}"
+
+need_root() {
+  if [[ $EUID -ne 0 ]]; then exec sudo -- "$0" "$@"; fi
+}
+
+# pm2 от имени пользователя сервиса — у него свой список процессов (~/.pm2).
+pm2u() { sudo -u "$RUN_USER" -H env PM2_HOME="$RUN_HOME/.pm2" pm2 "$@"; }
+asuser() { sudo -u "$RUN_USER" -H "$@"; }
+
+port() {
+  local p
+  p="$(awk '/^server:/{s=1;next} /^[^[:space:]#]/{s=0} s&&/^[[:space:]]+port:/{gsub(/[^0-9]/,"",$2); print $2; exit}' "$CONFIG" 2>/dev/null || true)"
+  echo "${p:-8080}"
+}
+
+cmd="${1:-status}"
+shift || true
+
+case "$cmd" in
+  status)
+    need_root "$cmd" "$@"
+    pm2u status
+    ;;
+  health)
+    if curl -s "http://127.0.0.1:$(port)/health"; then echo; else echo "Сервер не отвечает на порту $(port)"; exit 1; fi
+    ;;
+  logs)
+    need_root "$cmd" "$@"
+    pm2u logs signage --lines "${1:-100}"
+    ;;
+  restart|reload)
+    need_root "$cmd" "$@"
+    pm2u restart signage --update-env
+    ;;
+  stop|start)
+    need_root "$cmd" "$@"
+    pm2u "$cmd" signage
+    ;;
+  config)
+    need_root "$cmd" "$@"
+    "${EDITOR:-nano}" "$CONFIG"
+    pm2u restart signage --update-env
+    ;;
+  smb)
+    need_root "$cmd" "$@"
+    bash "$APP_DIR/deploy/setup-smb.sh"
+    ;;
+  hash-password)
+    node "$APP_DIR/packages/server/dist/cli/hash-password.js" "$@"
+    ;;
+  update)
+    need_root "$cmd" "$@"
+    cd "$APP_DIR"
+    if [[ -d .git ]]; then
+      echo "== Обновление кода из Git"
+      asuser git pull --ff-only
+    else
+      echo "Код установлен не из Git — обновите его копированием и запустите deploy/install.sh"
+    fi
+    echo "== Зависимости"
+    asuser npm ci --no-audit --no-fund
+    echo "== Сборка"
+    asuser npm run build
+    echo "== Перезапуск"
+    pm2u restart signage --update-env
+    sleep 3
+    "$0" health
+    ;;
+  -h|--help|help)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "Неизвестная команда: $cmd. Список: signage help" >&2
+    exit 1
+    ;;
+esac

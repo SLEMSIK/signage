@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Монтирование сетевого диска SMB на хосте (VM) для Signage.
 #
-#   cd /opt/signage && sudo ./deploy/setup-smb.sh
+#   sudo bash /opt/signage/deploy/setup-smb.sh      (или: signage smb)
 #
 # Что делает:
 #   - сохраняет учётные данные в /etc/signage-smb.cred (права 600);
@@ -13,18 +13,19 @@
 #     смонтирована, пытается смонтировать её снова;
 #   - пробует смонтировать сразу.
 #
-# Параметры берутся из .env (SMB_HOST, SMB_SHARE, SMB_USER, SMB_PASSWORD,
-# SMB_DOMAIN, SMB_VERS, SMB_ROOT). Скрипт можно запускать повторно — например,
-# после смены адреса SMB в .env.
+# Параметры берутся из /etc/signage/signage.env (SMB_HOST, SMB_SHARE, SMB_USER,
+# SMB_PASSWORD, SMB_DOMAIN, SMB_VERS, SMB_ROOT, SIGNAGE_USER). Его пишет
+# deploy/install.sh. Скрипт можно запускать повторно — например, после смены
+# адреса SMB в signage.env.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
 if [[ $EUID -ne 0 ]]; then
-  echo "Запустите через sudo: sudo $0" >&2
+  echo "Запустите через sudo: sudo bash $0" >&2
   exit 1
 fi
-if [[ ! -f .env ]]; then
-  echo "Нет файла .env — скопируйте .env.example в .env и заполните" >&2
+ENV_FILE="${SIGNAGE_ENV:-/etc/signage/signage.env}"
+if [[ ! -f $ENV_FILE ]]; then
+  echo "Нет файла $ENV_FILE — запустите deploy/install.sh или создайте его по образцу deploy/signage.env.example" >&2
   exit 1
 fi
 if ! command -v mount.cifs >/dev/null; then
@@ -33,20 +34,26 @@ if ! command -v mount.cifs >/dev/null; then
 fi
 
 set -a
-# shellcheck disable=SC1091
-. ./.env
+# shellcheck disable=SC1090
+. "$ENV_FILE"
 set +a
 
-: "${SMB_HOST:?SMB_HOST не задан в .env}"
-: "${SMB_SHARE:?SMB_SHARE не задан в .env}"
-: "${SMB_USER:?SMB_USER не задан в .env}"
-: "${SMB_PASSWORD:?SMB_PASSWORD не задан в .env}"
+: "${SMB_HOST:?SMB_HOST не задан в $ENV_FILE}"
+: "${SMB_SHARE:?SMB_SHARE не задан в $ENV_FILE}"
+: "${SMB_USER:?SMB_USER не задан в $ENV_FILE}"
+: "${SMB_PASSWORD:?SMB_PASSWORD не задан в $ENV_FILE}"
 SMB_VERS="${SMB_VERS:-3.0}"
 SMB_ROOT="${SMB_ROOT:-/srv/signage-smb}"
 SMB_DOMAIN="${SMB_DOMAIN:-}"
 MOUNT="$SMB_ROOT/share"
 CRED=/etc/signage-smb.cred
-UID_GID=1000   # пользователь node в контейнере
+# Файлы на шаре принадлежат пользователю, от имени которого работает сервер.
+RUN_USER="${SIGNAGE_USER:-signage}"
+if ! RUN_UID="$(id -u "$RUN_USER" 2>/dev/null)"; then
+  echo "Нет пользователя $RUN_USER — сначала запустите deploy/install.sh" >&2
+  exit 1
+fi
+RUN_GID="$(id -g "$RUN_USER")"
 
 # 1. Учётные данные
 umask 077
@@ -70,7 +77,7 @@ chmod 755 "$MOUNT"
 chmod 644 "$MOUNT/.NOT-MOUNTED"
 
 # 3. /etc/fstab
-OPTS="credentials=$CRED,vers=$SMB_VERS,uid=$UID_GID,gid=$UID_GID,file_mode=0664,dir_mode=0775,soft,nobrl,_netdev,nofail,x-systemd.mount-timeout=20"
+OPTS="credentials=$CRED,vers=$SMB_VERS,uid=$RUN_UID,gid=$RUN_GID,file_mode=0664,dir_mode=0775,soft,nobrl,_netdev,nofail,x-systemd.mount-timeout=20"
 # В fstab пробел в имени шары записывается как \040
 DEVICE="//$SMB_HOST/$SMB_SHARE"
 DEVICE="${DEVICE// /\\040}"
@@ -108,11 +115,6 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now signage-smb-remount.timer >/dev/null
 
-# Старый таймер из прежней версии документации больше не нужен.
-if systemctl list-unit-files signage-ensure.timer >/dev/null 2>&1 && systemctl is-enabled signage-ensure.timer >/dev/null 2>&1; then
-  systemctl disable --now signage-ensure.timer >/dev/null || true
-  echo "Отключён старый таймер signage-ensure.timer (контейнер теперь стартует и без SMB)"
-fi
 
 # 5. Пробуем смонтировать
 if mount "$MOUNT" 2>/tmp/signage-mount.err; then

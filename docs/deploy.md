@@ -1,16 +1,19 @@
 # Эксплуатация сервера Signage
 
-Сервер — один Docker-контейнер (Node.js) в виртуальной машине Ubuntu на Proxmox. Медиатека лежит на сетевом диске SMB (приоритет), её копия и база SQLite — на локальном диске VM. Если SMB недоступен, сервер полностью работает с диска VM.
+Сервер — процесс Node.js 22 под управлением PM2 в виртуальной машине Debian/Ubuntu на Proxmox. Медиатека лежит на сетевом диске SMB (приоритет), её копия и база SQLite — на локальном диске VM. Если SMB недоступен, сервер полностью работает с диска VM.
 
 ```
  Proxmox
- └── VM Ubuntu 24.04 (10.33.44.20)
-     ├── /srv/signage-smb/share  ← SMB //10.33.44.5/signage, монтирует хост (deploy/setup-smb.sh)
-     └── Docker: signage
-         ├── /data/smb/share     ← тот же SMB (bind, propagation rslave)
-         ├── /data/local-media   ← диск VM: загрузки без SMB и копия медиатеки (volume local_media)
-         └── /data/db            ← диск VM, SQLite (volume db)
+ └── VM Debian 13 (10.33.44.20)
+     ├── /opt/signage              код и сборка (пользователь signage)
+     ├── /etc/signage/             config.yaml, signage.env (пароль SMB)
+     ├── /var/lib/signage/db       SQLite
+     ├── /var/lib/signage/local-media   загрузки без SMB и копия медиатеки
+     ├── /srv/signage-smb/share    ← SMB //10.33.44.5/signage (deploy/setup-smb.sh)
+     └── PM2 (служба pm2-signage) → процесс signage
 ```
+
+Управление — команда `signage` (`status`, `health`, `logs`, `restart`, `config`, `update`, `hash-password`, `smb`).
 
 **Установка с нуля** — пошагово в [install-debian.md](install-debian.md) (Debian 13) или [install-ubuntu.md](install-ubuntu.md) (Ubuntu 24.04). Здесь — как работает сервер, что делать при сбоях, обновления, бэкапы и отказоустойчивость.
 
@@ -24,28 +27,31 @@
 - в админке жёлтый баннер «Сетевое хранилище недоступно — сервер работает с диска сервера»;
 - если на диске VM свободно меньше `storage.localMinFreeMb`, загрузка блокируется, а копия медиатеки перестаёт пополняться: часть файлов без SMB будет недоступна, об этом предупредят «Настройки».
 
-Это работает и **при загрузке VM**: SMB монтирует хост с `nofail`, контейнер стартует всегда. Когда шара появится, таймер `signage-smb-remount` смонтирует её (до минуты), контейнер увидит её без перезапуска (`propagation: rslave`), и сервер вернётся на SMB.
+Это работает и **при загрузке VM**: SMB монтируется с `nofail`, сервер стартует всегда. Когда шара появится, таймер `signage-smb-remount` смонтирует её (до минуты), и сервер сам вернётся на SMB.
 
 Проверить состояние на VM:
 
 ```bash
 mountpoint /srv/signage-smb/share
 systemctl list-timers signage-smb-remount.timer
-curl -s http://localhost:8080/health    # status: ok | degraded
+signage health                          # status: ok | degraded
 ```
-
-Если вы раньше ставили таймер `signage-ensure.timer` из прежней версии этой инструкции, `setup-smb.sh` отключит его: он больше не нужен.
 
 ## 2. Обновление
 
 ```bash
-cd /opt/signage
-git pull
-docker compose build --pull   # --pull: заодно свежий базовый образ (Node 22, Debian 13, ffmpeg)
-docker compose up -d
+signage update      # git pull → npm ci → сборка → перезапуск → проверка /health
 ```
 
-Раз в 1–2 месяца имеет смысл делать `docker compose build --pull && docker compose up -d` и без изменений кода: так в образ попадают исправления безопасности Node.js и Debian. Сам Docker и система обновляются через `sudo apt update && sudo apt full-upgrade`.
+Если код ставили архивом (без Git) — распакуйте новый архив и снова запустите `sudo bash deploy/install.sh` (настройки можно оставить).
+
+Node.js, ffmpeg и система обновляются вместе с ОС — раз в 1–2 месяца:
+
+```bash
+sudo apt update && sudo apt full-upgrade -y && signage restart
+```
+
+PM2 обновляется так: `sudo npm install -g pm2@7 && sudo -u signage -H env PM2_HOME=/var/lib/signage/.pm2 pm2 update`.
 
 Миграции БД применяются автоматически при старте. Перед обновлением полезно сделать бэкап: админка → «Настройки» → «Сделать бэкап сейчас».
 
@@ -58,15 +64,15 @@ docker compose up -d
 **Восстановление вручную** (например, на новой VM, когда админка ещё пуста или не запускается):
 
 ```bash
-cd /opt/signage
-docker compose stop
-# имя volume: <проект>_db, проект по умолчанию — имя папки (signage)
-docker run --rm -v signage_db:/data/db -v /mnt/backup:/backup alpine \
-  sh -c 'rm -f /data/db/signage.sqlite-wal /data/db/signage.sqlite-shm && cp /backup/signage-YYYYMMDD-HHMMSS.sqlite /data/db/signage.sqlite && chown 1000:1000 /data/db/signage.sqlite'
-docker compose start
+signage stop
+cd /var/lib/signage/db
+sudo rm -f signage.sqlite-wal signage.sqlite-shm
+sudo cp /srv/signage-smb/share/_backup/signage-YYYYMMDD-HHMMSS.sqlite signage.sqlite
+sudo chown signage:signage signage.sqlite
+signage start
 ```
 
-Файл бэкапа можно взять прямо с шары SMB (`_backup/`), смонтировав её в `/mnt/backup`.
+Бэкапы лежат на шаре SMB в папке `_backup` (на новой VM шара смонтирована скриптом установки).
 
 ## 4. Отказ узла Proxmox
 
