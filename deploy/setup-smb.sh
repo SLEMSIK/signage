@@ -71,7 +71,10 @@ chmod 644 "$MOUNT/.NOT-MOUNTED"
 
 # 3. /etc/fstab
 OPTS="credentials=$CRED,vers=$SMB_VERS,uid=$UID_GID,gid=$UID_GID,file_mode=0664,dir_mode=0775,soft,nobrl,_netdev,nofail,x-systemd.mount-timeout=20"
-LINE="//$SMB_HOST/$SMB_SHARE $MOUNT cifs $OPTS 0 0"
+# В fstab пробел в имени шары записывается как \040
+DEVICE="//$SMB_HOST/$SMB_SHARE"
+DEVICE="${DEVICE// /\\040}"
+LINE="$DEVICE $MOUNT cifs $OPTS 0 0"
 cp /etc/fstab /etc/fstab.signage.bak
 grep -v ' # signage-smb$' /etc/fstab > /etc/fstab.tmp || true
 echo "$LINE # signage-smb" >> /etc/fstab.tmp

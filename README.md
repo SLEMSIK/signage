@@ -14,6 +14,16 @@
 
 Полное техническое задание — [CLAUDE.md](CLAUDE.md).
 
+## Установка
+
+На сервере с Debian 12/13 или Ubuntu 22.04/24.04:
+
+```bash
+sudo bash deploy/install.sh
+```
+
+Скрипт поставит Docker и всё необходимое, спросит адрес, сетевой диск и пароли и запустит сервер. Как доставить код на сервер — в начале [docs/install-debian.md](docs/install-debian.md).
+
 ## Документация
 
 - [docs/install-debian.md](docs/install-debian.md) — **установка на чистый Debian 13** шаг за шагом: VM в Proxmox, Docker, SMB, пользователи, первый запуск, проверка.
